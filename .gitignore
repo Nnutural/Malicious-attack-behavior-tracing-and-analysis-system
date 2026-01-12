@@ -1,1 +1,8 @@
 little_term.code-workspace
+.idea/
+__pycache__/
+*.pyc
+*.pyo
+tempCodeRunnerFile.py
+.venv
+requirements.txt
