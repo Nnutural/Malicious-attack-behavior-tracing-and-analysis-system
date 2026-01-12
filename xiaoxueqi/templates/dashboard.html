@@ -1,0 +1,62 @@
+{% extends "layout.html" %}
+
+{% block title %}仪表盘 - 攻击溯源分析系统{% endblock %}
+
+{% block content %}
+<section class="page-head">
+  <h2>系统仪表盘</h2>
+  <p class="muted">展示全局统计信息与最新告警（当前为示例数据）。</p>
+</section>
+
+<section class="grid">
+  <div class="card stat">
+    <div class="stat-label">主机日志总数</div>
+    <div class="stat-value">{{ stats.log_count }}</div>
+  </div>
+  <div class="card stat">
+    <div class="stat-label">进程行为记录</div>
+    <div class="stat-value">{{ stats.process_count }}</div>
+  </div>
+  <div class="card stat">
+    <div class="stat-label">网络流量条数</div>
+    <div class="stat-value">{{ stats.flow_count }}</div>
+  </div>
+  <div class="card stat">
+    <div class="stat-label">攻击事件数</div>
+    <div class="stat-value">{{ stats.attack_count }}</div>
+  </div>
+</section>
+
+<section class="card">
+  <h3>最近攻击事件（示例）</h3>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>时间</th>
+          <th>主机</th>
+          <th>攻击技术</th>
+          <th>严重程度</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>2026-01-12 10:30:15</td>
+          <td>Server-01</td>
+          <td>T1078 - Valid Accounts</td>
+          <td><span class="badge danger">高</span></td>
+          <td><a class="link" href="{{ url_for('traceback.index') }}">详情</a></td>
+        </tr>
+        <tr>
+          <td>2026-01-12 10:25:42</td>
+          <td>Server-02</td>
+          <td>T1059 - Command Execution</td>
+          <td><span class="badge warn">中</span></td>
+          <td><a class="link" href="{{ url_for('traceback.index') }}">详情</a></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

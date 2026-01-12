@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}攻击溯源分析系统{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+  {% block extra_css %}{% endblock %}
+</head>
+<body>
+  <header class="topnav">
+    <div class="container topnav-inner">
+      <div class="brand">
+        <a href="{{ url_for('main.index') }}">攻击溯源分析系统</a>
+      </div>
+
+      <nav class="navlinks">
+        <a href="{{ url_for('main.index') }}">主页</a>
+        <a href="{{ url_for('dashboard.index') }}">仪表盘</a>
+        <a href="{{ url_for('logs.list_logs') }}">日志分析</a>
+        <a href="{{ url_for('behavior.index') }}">行为分析</a>
+        <a href="{{ url_for('traffic.index') }}">流量分析</a>
+        <a href="{{ url_for('attack.index') }}">攻击链</a>
+        <a href="{{ url_for('traceback.index') }}">溯源分析</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container page">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      © 2026 恶意攻击行为溯源分析系统 | 小学期项目
+    </div>
+  </footer>
+
+  {% block extra_js %}{% endblock %}
+</body>
+</html>

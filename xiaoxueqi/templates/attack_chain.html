@@ -1,0 +1,65 @@
+{% extends "layout.html" %}
+
+{% block title %}攻击链分析 - 攻击溯源分析系统{% endblock %}
+
+{% block content %}
+<section class="page-head">
+  <h2>攻击链分析</h2>
+  <p class="muted">后续将事件映射到 ATT&CK 阶段并形成攻击链时间线。</p>
+</section>
+
+<section class="grid">
+  <div class="card">
+    <h3>ATT&CK 框架映射（占位）</h3>
+    <div class="placeholder">ATT&CK Map Placeholder</div>
+  </div>
+  <div class="card">
+    <h3>攻击时间线（占位）</h3>
+    <div class="placeholder">Attack Timeline Placeholder</div>
+  </div>
+</section>
+
+<section class="card">
+  <h3>检测到的攻击技术（示例）</h3>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>技术ID</th>
+          <th>技术名称</th>
+          <th>战术</th>
+          <th>检测次数</th>
+          <th>最后检测时间</th>
+          <th>严重程度</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>T1078</td>
+          <td>Valid Accounts</td>
+          <td>Initial Access</td>
+          <td>3</td>
+          <td>2026-01-12 10:30:00</td>
+          <td><span class="badge danger">高</span></td>
+        </tr>
+        <tr>
+          <td>T1059</td>
+          <td>Command and Scripting Interpreter</td>
+          <td>Execution</td>
+          <td>5</td>
+          <td>2026-01-12 10:35:00</td>
+          <td><span class="badge warn">中</span></td>
+        </tr>
+        <tr>
+          <td>T1021</td>
+          <td>Remote Services</td>
+          <td>Lateral Movement</td>
+          <td>2</td>
+          <td>2026-01-12 10:40:00</td>
+          <td><span class="badge danger">高</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

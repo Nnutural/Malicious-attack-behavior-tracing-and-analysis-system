@@ -1,0 +1,60 @@
+{% extends "layout.html" %}
+
+{% block title %}流量分析 - 攻击溯源分析系统{% endblock %}
+
+{% block content %}
+<section class="page-head">
+  <h2>网络流量分析</h2>
+  <p class="muted">后续接入会话统计、异常流量检测、隧道识别等功能。</p>
+</section>
+
+<section class="grid">
+  <div class="card">
+    <h3>流量统计（占位）</h3>
+    <div class="placeholder">Traffic Stats Placeholder</div>
+  </div>
+  <div class="card">
+    <h3>协议分布（占位）</h3>
+    <div class="placeholder">Protocol Distribution Placeholder</div>
+  </div>
+</section>
+
+<section class="card">
+  <h3>网络会话（示例）</h3>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>源IP</th>
+          <th>目标IP</th>
+          <th>协议</th>
+          <th>端口</th>
+          <th>连接数</th>
+          <th>总流量</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>192.168.1.100</td>
+          <td>8.8.8.8</td>
+          <td>TCP</td>
+          <td>443</td>
+          <td>156</td>
+          <td>1000 KB</td>
+          <td><span class="muted">后续支持</span></td>
+        </tr>
+        <tr>
+          <td>192.168.1.101</td>
+          <td>1.1.1.1</td>
+          <td>UDP</td>
+          <td>53</td>
+          <td>89</td>
+          <td>45 KB</td>
+          <td><span class="muted">后续支持</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,59 @@
+{% extends "layout.html" %}
+
+{% block title %}行为分析 - 攻击溯源分析系统{% endblock %}
+
+{% block content %}
+<section class="page-head">
+  <h2>主机行为分析</h2>
+  <p class="muted">后续接入进程树、文件操作、可疑行为链分析。</p>
+</section>
+
+<section class="grid">
+  <div class="card">
+    <h3>进程树（占位）</h3>
+    <p class="muted">后续在这里渲染进程父子关系图。</p>
+    <div class="placeholder">Process Tree Placeholder</div>
+  </div>
+  <div class="card">
+    <h3>文件操作时间线（占位）</h3>
+    <p class="muted">后续在这里渲染文件创建/修改/删除时间线。</p>
+    <div class="placeholder">File Timeline Placeholder</div>
+  </div>
+</section>
+
+<section class="card">
+  <h3>进程列表（示例）</h3>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>PID</th>
+          <th>进程名</th>
+          <th>父进程PID</th>
+          <th>命令行</th>
+          <th>创建时间</th>
+          <th>状态</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1234</td>
+          <td>explorer.exe</td>
+          <td>1000</td>
+          <td>C:\Windows\explorer.exe</td>
+          <td>2026-01-12 08:00:00</td>
+          <td><span class="badge ok">运行中</span></td>
+        </tr>
+        <tr>
+          <td>5678</td>
+          <td>cmd.exe</td>
+          <td>1234</td>
+          <td>cmd.exe /c "whoami"</td>
+          <td>2026-01-12 10:30:15</td>
+          <td><span class="badge danger">可疑</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

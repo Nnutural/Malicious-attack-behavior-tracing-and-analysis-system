@@ -1,0 +1,62 @@
+{% extends "layout.html" %}
+
+{% block title %}溯源分析 - 攻击溯源分析系统{% endblock %}
+
+{% block content %}
+<section class="page-head">
+  <h2>攻击溯源分析</h2>
+  <p class="muted">后续接入攻击路径重建、攻击者画像、C2 分析与归因结果。</p>
+</section>
+
+<section class="grid">
+  <div class="card">
+    <h3>攻击路径重建（占位）</h3>
+    <div class="placeholder">Attack Path Placeholder</div>
+  </div>
+  <div class="card">
+    <h3>攻击者画像（占位）</h3>
+    <div class="placeholder">Attacker Profile Placeholder</div>
+  </div>
+</section>
+
+<section class="grid">
+  <div class="card">
+    <h3>C2 基础设施分析（示例）</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>C2 服务器IP</th>
+            <th>连接次数</th>
+            <th>威胁等级</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>45.67.89.123</td>
+            <td>156</td>
+            <td><span class="badge danger">高</span></td>
+          </tr>
+          <tr>
+            <td>23.45.67.89</td>
+            <td>89</td>
+            <td><span class="badge warn">中</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>APT 组织归因（示例）</h3>
+    <p><strong>最可能的 APT：</strong> APT29</p>
+    <p class="muted">相似度：72%</p>
+    <div class="progress">
+      <div class="progress-bar" style="width: 72%;">72%</div>
+    </div>
+    <p style="margin-top:10px;" class="muted">
+      常用技术：T1078, T1059, T1021
+    </p>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,56 @@
+{% extends "layout.html" %}
+
+{% block title %}日志分析 - 攻击溯源分析系统{% endblock %}
+
+{% block content %}
+<section class="page-head">
+  <h2>主机日志分析</h2>
+  <p class="muted">先展示示例日志列表，后续再接入真实采集与解析。</p>
+</section>
+
+<section class="card">
+  <h3>日志列表</h3>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>时间</th>
+          <th>主机</th>
+          <th>级别</th>
+          <th>事件ID</th>
+          <th>消息</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for log in logs %}
+        <tr>
+          <td>{{ log.id }}</td>
+          <td>{{ log.timestamp }}</td>
+          <td>{{ log.hostname }}</td>
+          <td>
+            {% if log.level == 'ERROR' %}
+              <span class="badge danger">{{ log.level }}</span>
+            {% elif log.level == 'WARNING' %}
+              <span class="badge warn">{{ log.level }}</span>
+            {% else %}
+              <span class="badge info">{{ log.level }}</span>
+            {% endif %}
+          </td>
+          <td>{{ log.event_id }}</td>
+          <td>{{ log.message }}</td>
+          <td><a class="link" href="{{ url_for('logs.detail', log_id=log.id) }}">详情</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="pager">
+    <a class="btn btn-secondary" href="{{ url_for('logs.list_logs', page=page-1) }}">上一页</a>
+    <span class="muted">第 {{ page }} 页</span>
+    <a class="btn btn-secondary" href="{{ url_for('logs.list_logs', page=page+1) }}">下一页</a>
+  </div>
+</section>
+{% endblock %}

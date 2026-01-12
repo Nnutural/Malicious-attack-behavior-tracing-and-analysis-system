@@ -43,8 +43,3 @@ def insert(sql,params):
     return cursor.lastrowid # 返回插入数据的主键id,也是最后一条数据的id
 
 
-if __name__ == '__main__':
-    # 连接MySQL数据库，并执行SQL语句查询用户名和密码是否正确
-    sql = "select * from userinfo where role=%s and mobile=%s and password=%s"
-    user_dict=fetch_one(sql,[1,19303272074,123123])
-    print(user_dict)

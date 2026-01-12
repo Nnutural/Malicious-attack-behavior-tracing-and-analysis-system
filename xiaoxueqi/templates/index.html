@@ -1,0 +1,48 @@
+{% extends "layout.html" %}
+
+{% block title %}主页 - 攻击溯源分析系统{% endblock %}
+
+{% block content %}
+<section class="card hero">
+  <div>
+    <h1 class="hero-title">恶意攻击行为溯源分析系统</h1>
+    <p class="muted">
+      基于主机日志、主机行为、网络流量进行多源融合分析，完成攻击链识别与溯源展示。
+    </p>
+
+    <div class="btn-row">
+      <a class="btn" href="{{ url_for('dashboard.index') }}">进入仪表盘</a>
+      <a class="btn btn-secondary" href="{{ url_for('logs.list_logs') }}">查看日志</a>
+      <a class="btn btn-secondary" href="{{ url_for('attack.index') }}">查看攻击链</a>
+      <a class="btn btn-secondary" href="{{ url_for('traceback.index') }}">进入溯源</a>
+    </div>
+  </div>
+
+  <div class="hero-aside">
+    <div class="kpi">
+      <div class="kpi-title">项目目标</div>
+      <ul class="kpi-list">
+        <li>采集与融合：日志 / 行为 / 流量</li>
+        <li>ATT&CK 映射：攻击链阶段展示</li>
+        <li>时间线关联：窗口聚合与因果推断</li>
+        <li>溯源输出：路径重建 + 画像 + C2</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="grid">
+  <div class="card">
+    <h3>主机日志</h3>
+    <p class="muted">日志范式化、实体提取、会话重建（后续实现）。</p>
+  </div>
+  <div class="card">
+    <h3>主机行为</h3>
+    <p class="muted">进程树/文件操作链路展示（后续实现）。</p>
+  </div>
+  <div class="card">
+    <h3>网络流量</h3>
+    <p class="muted">会话统计、异常流量分析（后续实现）。</p>
+  </div>
+</section>
+{% endblock %}
