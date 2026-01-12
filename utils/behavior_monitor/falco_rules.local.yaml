@@ -1,0 +1,59 @@
+# ================= 毕设演示专用规则 (最终版) =================
+
+# 1. [网络连接] 捕获 nc, curl
+- rule: Bishe Network Tool
+  desc: Detect network tool execution
+  condition: >
+    spawned_process and 
+    (proc.name in (nc, ncat, curl, wget) or proc.cmdline contains "nc " or proc.cmdline contains "curl")
+  output: "Bishe Alert: Suspicious network tool execution (user=%user.name command=%proc.cmdline)"
+  priority: WARNING
+
+# 2. [文件删除] 捕获 rm
+- rule: Bishe File Deletion
+  desc: Detect rm command
+  condition: spawned_process and proc.name = rm
+  output: "Bishe Alert: File deletion detected (user=%user.name command=%proc.cmdline)"
+  priority: WARNING
+
+# 3. [文件创建] 捕获 touch
+- rule: Bishe File Creation
+  desc: Detect touch command
+  condition: spawned_process and proc.name = touch
+  output: "Bishe Alert: File creation detected (user=%user.name command=%proc.cmdline)"
+  priority: WARNING
+
+# 4. [文件篡改] 放宽条件：只要 cmdline 里同时出现 echo 和 (>> 或 >) 就报警
+- rule: Bishe File Modification
+  desc: Detect modification via redirection or chmod
+  condition: >
+    spawned_process and 
+    (proc.name = chmod or (proc.cmdline contains "echo" and (proc.cmdline contains ">" or proc.cmdline contains "tee")))
+  output: "Bishe Alert: File modification detected (user=%user.name command=%proc.cmdline)"
+  priority: WARNING
+
+# 5. [敏感读取] 捕获 cat /etc/shadow
+- rule: Bishe Sensitive Read
+  desc: Detect sensitive file reading
+  condition: spawned_process and (proc.cmdline contains "/etc/shadow" or proc.cmdline contains "/etc/passwd")
+  output: "Bishe Alert: Sensitive file access detected (user=%user.name command=%proc.cmdline)"
+  priority: WARNING
+
+# 6. [无文件/内存执行] 捕获管道执行 (针对 echo '...' | /bin/bash)
+# 当 bash 从管道读取时，通常没有参数，或者被识别为非交互式 shell
+- rule: Bishe Fileless Execution
+  desc: Detect shell reading from stdin (pipe)
+  condition: >
+    spawned_process and 
+    (proc.name in (bash, sh) and proc.pname in (bash, sh) and not proc.cmdline contains "real_attack.sh")
+  output: "Bishe Alert: Fileless execution via pipe detected (user=%user.name command=%proc.cmdline)"
+  priority: WARNING
+
+# 7. [异常 Shell] 放宽条件：只要 cmdline 里有 python 和 sh
+- rule: Bishe Python Shell
+  desc: Detect python spawning shell
+  condition: >
+    spawned_process and 
+    ((proc.name startswith python) and (proc.cmdline contains "sh" or proc.cmdline contains "bash"))
+  output: "Bishe Alert: Python spawning abnormal shell (user=%user.name command=%proc.cmdline)"
+  priority: WARNING
