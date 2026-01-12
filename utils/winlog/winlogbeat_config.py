@@ -1,4 +1,4 @@
-"""用于主机日志采集的 Winlogbeat 配置生成器。"""
+"""用于主机日志采集的配置生成器（Winlogbeat 配置仅作参考）。"""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def generate_winlogbeat_config(
     system_event_ids: list[str] | None = None,
     file_prefix: str = "winlogbeat",
 ) -> str:
-    """生成 winlogbeat.yml 配置文本。
+    """生成 winlogbeat.yml 配置文本（仅作参考/对照，系统运行不依赖 Winlogbeat）。
 
     Args:
         output_dir: output.file 写入 NDJSON 的目录。
@@ -76,6 +76,39 @@ def generate_winlogbeat_config(
     return config
 
 
+def generate_windows_collector_config(
+    *,
+    channels: list[str] | None = None,
+    event_ids: list[str] | None = None,
+    include_xml: bool = False,
+    batch_size: int = 512,
+    state_file: str = "utils/winlog/.state/winevent_state.json",
+    use_pywin32: bool = True,
+    use_wevtutil_fallback: bool = True,
+) -> str:
+    """生成系统内采集器的配置模板（YAML 风格）。
+
+    Returns:
+        配置模板字符串。
+    """
+    channels = channels or ["Security", "System"]
+    event_ids = event_ids or DEFAULT_SECURITY_EVENT_IDS + DEFAULT_SYSTEM_EVENT_IDS
+    include_xml_text = "true" if include_xml else "false"
+
+    config = (
+        "windows_eventlog_collector:\n"
+        "  channels:\n"
+        + "".join(f"    - {channel}\n" for channel in channels)
+        + f"  event_ids: [{_format_event_ids(event_ids)}]\n"
+        f"  include_xml: {include_xml_text}\n"
+        f"  batch_size: {batch_size}\n"
+        f"  state_file: \"{state_file}\"\n"
+        f"  use_pywin32: {str(use_pywin32).lower()}\n"
+        f"  use_wevtutil_fallback: {str(use_wevtutil_fallback).lower()}\n"
+    )
+    return config
+
+
 if __name__ == "__main__":
     import argparse
     import json
@@ -84,13 +117,14 @@ if __name__ == "__main__":
     from .parser_winlogbeat import extract_host_logs_from_winlogbeat_ndjson
     from .session_rebuild import rebuild_logon_sessions
 
-    parser = argparse.ArgumentParser(description="生成 winlogbeat 配置并运行示例。")
+    parser = argparse.ArgumentParser(description="生成配置并运行示例。")
     parser.add_argument("--output-dir", default="winlogbeat_output")
     parser.add_argument("--include-xml", action="store_true")
     parser.add_argument("--ndjson", default="sample_winlogbeat.ndjson")
     args = parser.parse_args()
 
     print(generate_winlogbeat_config(output_dir=args.output_dir, include_xml=args.include_xml))
+    print(generate_windows_collector_config(include_xml=args.include_xml))
 
     ndjson_path = _Path(args.ndjson)
     if ndjson_path.exists():
