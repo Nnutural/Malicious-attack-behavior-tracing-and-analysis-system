@@ -4,6 +4,8 @@ __pycache__/
 *.pyc
 *.pyo
 tempCodeRunnerFile.py
+utils/winlog/.state/
+*.sqlite
 .venv
 requirements.txt
 utils/winlog/.state
