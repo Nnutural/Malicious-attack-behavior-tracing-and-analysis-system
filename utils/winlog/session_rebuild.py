@@ -75,7 +75,7 @@ def rebuild_logon_sessions(
     """从归一化主机日志事件中重建登录会话。
 
     Args:
-        host_log_events: extract_host_logs_from_winlogbeat_ndjson 的输出列表。
+        host_log_events: 归一化主机日志提取函数的输出列表。
         session_timeout_sec: 缺失登出事件时的超时时间（秒）。
         strict: 为 True 时，字段缺失/格式错误抛出 ValueError。
 

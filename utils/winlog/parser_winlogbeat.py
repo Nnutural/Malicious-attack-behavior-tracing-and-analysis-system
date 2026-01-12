@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import json
 import logging
+import platform
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 import xml.etree.ElementTree as ET
+
+from .collector_windows import WindowsEventCollector
+from .state_store import StateStore
 
 
 logger = logging.getLogger(__name__)
@@ -136,6 +140,12 @@ def _parse_event_data_from_xml(xml_text: str) -> dict[str, Any]:
         if not name:
             continue
         data[name] = (elem.text or "").strip()
+    if not data:
+        for elem in root.findall(".//{*}UserData//{*}Data"):
+            name = elem.attrib.get("Name")
+            if not name:
+                continue
+            data[name] = (elem.text or "").strip()
     return data
 
 
@@ -204,6 +214,156 @@ def _extract_event_type_from_record(record: dict[str, Any]) -> str | None:
     return None
 
 
+def _resolve_event_type(
+    raw_id: str, record_context: dict[str, Any] | None, strict: bool, record_ref: str
+) -> str | None:
+    event_type = EVENT_TYPE_MAP.get(raw_id)
+    if event_type:
+        return event_type
+    if strict:
+        logger.debug("%s: 跳过不支持的事件 ID %s", record_ref, raw_id)
+        return None
+    if record_context:
+        event_type = _extract_event_type_from_record(record_context)
+        if event_type:
+            return event_type
+    logger.debug("%s: 跳过不支持的事件 ID %s", record_ref, raw_id)
+    return None
+
+
+def _extract_entities(
+    *,
+    event_type: str,
+    event_data: dict[str, Any],
+    record_context: dict[str, Any] | None,
+    record_ref: str,
+) -> dict[str, Any]:
+    entities: dict[str, Any] = {}
+    user_value = _get_event_data_value(event_data, ["TargetUserName", "SubjectUserName"])
+    if not user_value and record_context:
+        user_value = (record_context.get("user") or {}).get("name")
+    if user_value:
+        entities["user"] = user_value
+
+    src_ip_value = _get_event_data_value(
+        event_data, ["IpAddress", "SourceNetworkAddress", "Source Network Address", "ClientAddress"]
+    )
+    if not src_ip_value and record_context:
+        src_ip_value = (record_context.get("source") or {}).get("ip")
+    if src_ip_value:
+        entities["src_ip"] = src_ip_value
+
+    session_id_value = _get_event_data_value(
+        event_data, ["TargetLogonId", "SubjectLogonId", "LogonId"]
+    )
+    if session_id_value is not None:
+        entities["session_id"] = str(session_id_value)
+    elif event_type in ("user_logon", "user_logoff", "user_logon_failed"):
+        logger.warning("%s: 缺少 session_id，事件类型=%s", record_ref, event_type)
+
+    if event_type == "process_creation_log":
+        process_name = _get_event_data_value(event_data, ["NewProcessName"])
+        pid = _get_event_data_value(event_data, ["NewProcessId"])
+        parent_process = _get_event_data_value(event_data, ["ParentProcessName", "Creator Process Name"])
+        command_line = _get_event_data_value(event_data, ["CommandLine", "Process Command Line"])
+        if process_name:
+            entities["process_name"] = process_name
+        if pid:
+            entities["pid"] = pid
+        if parent_process:
+            entities["parent_process"] = parent_process
+        if command_line:
+            entities["command_line"] = command_line
+
+    if event_type == "service_install":
+        service_name = _get_event_data_value(event_data, ["ServiceName", "param1"])
+        service_path = _get_event_data_value(event_data, ["ImagePath", "ServiceFileName"])
+        if service_name:
+            entities["service_name"] = service_name
+        if service_path:
+            entities["service_path"] = service_path
+
+    if event_type == "account_created":
+        new_user = _get_event_data_value(event_data, ["TargetUserName", "SamAccountName"])
+        if new_user:
+            entities["new_user"] = new_user
+
+    if event_type == "group_membership_add":
+        group = _get_event_data_value(event_data, ["TargetUserName", "TargetSid", "GroupName", "Group"])
+        member = _get_event_data_value(event_data, ["MemberName", "MemberSid"])
+        actor = _get_event_data_value(event_data, ["SubjectUserName"])
+        if group:
+            entities["group"] = group
+        if member:
+            entities["member"] = member
+        if actor:
+            entities["actor"] = actor
+
+    if event_type == "log_clear":
+        clear_user = _get_event_data_value(event_data, ["SubjectUserName"])
+        if clear_user:
+            entities["user"] = clear_user
+
+    return entities
+
+
+def _build_description(event_type: str, raw_id: str, entities: dict[str, Any]) -> str:
+    description_parts = [f"事件类型={event_type}", f"事件ID={raw_id}"]
+    if "user" in entities:
+        description_parts.append(f"用户={entities['user']}")
+    if "src_ip" in entities:
+        description_parts.append(f"源IP={entities['src_ip']}")
+    if "session_id" in entities:
+        description_parts.append(f"会话ID={entities['session_id']}")
+    return ", ".join(description_parts)
+
+
+def _build_host_log_event(
+    *,
+    raw_id: str,
+    event_dt: datetime,
+    ingest_dt: datetime | None,
+    host_ip: str,
+    event_data: dict[str, Any],
+    record_context: dict[str, Any] | None,
+    strict: bool,
+    record_ref: str,
+    clock_offset_ms: int,
+    enable_time_alignment: bool,
+    delays_ms: list[int] | None,
+) -> dict | None:
+    event_type = _resolve_event_type(raw_id, record_context, strict, record_ref)
+    if not event_type:
+        return None
+
+    entities = _extract_entities(
+        event_type=event_type,
+        event_data=event_data,
+        record_context=record_context,
+        record_ref=record_ref,
+    )
+
+    aligned_dt = event_dt
+    if enable_time_alignment and clock_offset_ms:
+        aligned_dt = event_dt + timedelta(milliseconds=clock_offset_ms)
+
+    if enable_time_alignment and clock_offset_ms == 0 and ingest_dt is not None:
+        delay_ms = int((ingest_dt - event_dt).total_seconds() * 1000)
+        entities["_ingest_delay_ms"] = delay_ms
+        if delays_ms is not None:
+            delays_ms.append(delay_ms)
+
+    return {
+        "data_source": "host_log",
+        "timestamp": _format_zulu(aligned_dt),
+        "host_ip": host_ip,
+        "event_type": event_type,
+        "raw_id": raw_id,
+        "entities": entities,
+        "description": _build_description(event_type, raw_id, entities),
+    }
+
+
 def _handle_error(
     strict: bool,
     message: str,
@@ -228,7 +388,7 @@ def extract_host_logs_from_winlogbeat_ndjson(
     enable_time_alignment: bool = True,
     strict: bool = True,
 ) -> list[dict]:
-    """从 Winlogbeat NDJSON 中提取并归一化主机日志。
+    """从 Winlogbeat NDJSON 中提取并归一化主机日志（兼容输入适配器）。
 
     Args:
         ndjson_path: Winlogbeat NDJSON 文件路径（每行一个 JSON）。
@@ -275,26 +435,6 @@ def extract_host_logs_from_winlogbeat_ndjson(
                 )
                 continue
 
-            event_type = EVENT_TYPE_MAP.get(raw_id)
-            if not event_type:
-                if strict:
-                    logger.debug(
-                        "%s:%d: 跳过不支持的事件 ID %s",
-                        path,
-                        line_no,
-                        raw_id,
-                    )
-                    continue
-                event_type = _extract_event_type_from_record(record)
-                if not event_type:
-                    logger.debug(
-                        "%s:%d: 跳过不支持的事件 ID %s",
-                        path,
-                        line_no,
-                        raw_id,
-                    )
-                    continue
-
             ts_value = record.get("@timestamp")
             if not ts_value:
                 _handle_error(
@@ -315,10 +455,6 @@ def extract_host_logs_from_winlogbeat_ndjson(
             if event_dt is None:
                 continue
 
-            aligned_dt = event_dt
-            if enable_time_alignment and clock_offset_ms:
-                aligned_dt = event_dt + timedelta(milliseconds=clock_offset_ms)
-
             host_ip_value = _select_host_ip(record, host_ip)
             if not host_ip_value:
                 _handle_error(
@@ -330,126 +466,35 @@ def extract_host_logs_from_winlogbeat_ndjson(
                 )
                 continue
 
-            entities: dict[str, Any] = {}
             event_data = _get_event_data(record)
+            record_ref = f"{path}:{line_no}"
 
-            user_value = _get_event_data_value(
-                event_data, ["TargetUserName", "SubjectUserName"]
-            )
-            if not user_value:
-                user_value = (record.get("user") or {}).get("name")
-            if user_value:
-                entities["user"] = user_value
-
-            src_ip_value = _get_event_data_value(
-                event_data, ["IpAddress", "SourceNetworkAddress", "Source Network Address"]
-            )
-            if not src_ip_value:
-                src_ip_value = (record.get("source") or {}).get("ip")
-            if src_ip_value:
-                entities["src_ip"] = src_ip_value
-
-            session_id_value = _get_event_data_value(
-                event_data, ["TargetLogonId", "SubjectLogonId", "LogonId"]
-            )
-            if session_id_value is not None:
-                entities["session_id"] = str(session_id_value)
-            elif event_type in ("user_logon", "user_logoff", "user_logon_failed"):
-                logger.warning(
-                    "%s:%d: 缺少 session_id，事件类型=%s",
-                    path,
-                    line_no,
-                    event_type,
-                )
-
-            if event_type == "process_creation_log":
-                process_name = _get_event_data_value(event_data, ["NewProcessName"])
-                pid = _get_event_data_value(event_data, ["NewProcessId"])
-                parent_process = _get_event_data_value(
-                    event_data, ["ParentProcessName", "Creator Process Name"]
-                )
-                command_line = _get_event_data_value(
-                    event_data, ["CommandLine", "Process Command Line"]
-                )
-                if process_name:
-                    entities["process_name"] = process_name
-                if pid:
-                    entities["pid"] = pid
-                if parent_process:
-                    entities["parent_process"] = parent_process
-                if command_line:
-                    entities["command_line"] = command_line
-
-            if event_type == "service_install":
-                service_name = _get_event_data_value(event_data, ["ServiceName", "param1"])
-                service_path = _get_event_data_value(
-                    event_data, ["ImagePath", "ServiceFileName"]
-                )
-                if service_name:
-                    entities["service_name"] = service_name
-                if service_path:
-                    entities["service_path"] = service_path
-
-            if event_type == "account_created":
-                new_user = _get_event_data_value(
-                    event_data, ["TargetUserName", "SamAccountName"]
-                )
-                if new_user:
-                    entities["new_user"] = new_user
-
-            if event_type == "group_membership_add":
-                group = _get_event_data_value(
-                    event_data, ["TargetUserName", "TargetSid", "GroupName", "Group"]
-                )
-                member = _get_event_data_value(event_data, ["MemberName", "MemberSid"])
-                actor = _get_event_data_value(event_data, ["SubjectUserName"])
-                if group:
-                    entities["group"] = group
-                if member:
-                    entities["member"] = member
-                if actor:
-                    entities["actor"] = actor
-
-            if event_type == "log_clear":
-                clear_user = _get_event_data_value(event_data, ["SubjectUserName"])
-                if clear_user:
-                    entities["user"] = clear_user
-
+            ingest_dt = None
             if enable_time_alignment and clock_offset_ms == 0:
                 created_value = (record.get("event") or {}).get("created")
                 if created_value:
-                    created_dt = _parse_iso8601(
+                    ingest_dt = _parse_iso8601(
                         created_value,
                         filename=str(path),
                         line_no=line_no,
                         strict=False,
                     )
-                    if created_dt is not None:
-                        delay_ms = int((created_dt - event_dt).total_seconds() * 1000)
-                        entities["_ingest_delay_ms"] = delay_ms
-                        delays_ms.append(delay_ms)
 
-            description_parts = [f"事件类型={event_type}"]
-            description_parts.append(f"事件ID={raw_id}")
-            if "user" in entities:
-                description_parts.append(f"用户={entities['user']}")
-            if "src_ip" in entities:
-                description_parts.append(f"源IP={entities['src_ip']}")
-            if "session_id" in entities:
-                description_parts.append(f"会话ID={entities['session_id']}")
-            description = ", ".join(description_parts)
-
-            results.append(
-                {
-                    "data_source": "host_log",
-                    "timestamp": _format_zulu(aligned_dt),
-                    "host_ip": host_ip_value,
-                    "event_type": event_type,
-                    "raw_id": raw_id,
-                    "entities": entities,
-                    "description": description,
-                }
+            normalized = _build_host_log_event(
+                raw_id=raw_id,
+                event_dt=event_dt,
+                ingest_dt=ingest_dt,
+                host_ip=host_ip_value,
+                event_data=event_data,
+                record_context=record,
+                strict=strict,
+                record_ref=record_ref,
+                clock_offset_ms=clock_offset_ms,
+                enable_time_alignment=enable_time_alignment,
+                delays_ms=delays_ms,
             )
+            if normalized:
+                results.append(normalized)
 
     if delays_ms:
         negative = sum(1 for value in delays_ms if value < 0)
@@ -458,6 +503,145 @@ def extract_host_logs_from_winlogbeat_ndjson(
             logger.warning(
                 "采集延迟异常 %s: 负值=%d, 过大=%d, 最小=%d, 最大=%d",
                 path,
+                negative,
+                large,
+                min(delays_ms),
+                max(delays_ms),
+            )
+
+    return results
+
+
+def extract_host_logs_from_windows_eventlog(
+    *,
+    channels: list[str] | None = None,
+    event_ids: list[str] | None = None,
+    include_xml: bool = False,
+    batch_size: int = 512,
+    max_events: int = 200,
+    timeout_sec: int = 2,
+    host_ip: str | None = None,
+    clock_offset_ms: int = 0,
+    enable_time_alignment: bool = True,
+    strict: bool = True,
+    state_store: StateStore | None = None,
+    use_pywin32: bool = True,
+    use_wevtutil_fallback: bool = True,
+) -> list[dict]:
+    """从 Windows Event Log 系统内采集并归一化主机日志。
+
+    Args:
+        channels: 采集通道列表，如 ["Security", "System"]。
+        event_ids: 事件 ID 过滤列表，默认使用支持的事件集合。
+        include_xml: 是否在 RawEvent 中保留 XML 原文。
+        batch_size: 批量读取大小。
+        max_events: 最大采集事件数。
+        timeout_sec: 采集超时（部分实现可能忽略）。
+        host_ip: 可选的主机 IP/主机名覆盖值。
+        clock_offset_ms: 对事件时间戳应用的固定偏移（毫秒）。
+        enable_time_alignment: 是否应用时间对齐与诊断逻辑。
+        strict: 为 True 时，字段缺失/格式错误抛出 ValueError。
+        state_store: 断点续读状态存储。
+        use_pywin32: 是否优先使用 pywin32。
+        use_wevtutil_fallback: 是否使用 wevtutil 作为备用路径。
+
+    Returns:
+        归一化后的事件列表（host_log）。
+    """
+    if platform.system().lower() != "windows":
+        raise NotImplementedError("Windows Event Log 采集仅支持 Windows 平台")
+
+    event_ids = event_ids or sorted(EVENT_TYPE_MAP.keys())
+    collector = WindowsEventCollector(
+        channels=channels,
+        event_ids=event_ids,
+        include_xml=include_xml,
+        batch_size=batch_size,
+        state_store=state_store or StateStore(),
+        use_pywin32=use_pywin32,
+        use_wevtutil_fallback=use_wevtutil_fallback,
+    )
+
+    raw_events = collector.collect(max_events=max_events, timeout_sec=timeout_sec)
+    delays_ms: list[int] = []
+    results: list[dict] = []
+
+    for index, raw_event in enumerate(raw_events, start=1):
+        channel = raw_event.get("channel") or "WindowsEventLog"
+        record_id = raw_event.get("record_id")
+        record_no = int(record_id) if isinstance(record_id, int) else index
+        record_ref = f"{channel}:{record_no}"
+
+        raw_id_value = raw_event.get("event_id")
+        if raw_id_value is None:
+            _handle_error(
+                strict,
+                "缺少事件 ID",
+                filename=channel,
+                line_no=record_no,
+            )
+            continue
+        raw_id = str(raw_id_value)
+
+        system_time = raw_event.get("system_time_utc")
+        event_dt = _parse_iso8601(
+            system_time or "",
+            filename=channel,
+            line_no=record_no,
+            strict=strict,
+            raw_id=raw_id,
+        )
+        if event_dt is None:
+            continue
+
+        host_value = host_ip or raw_event.get("computer_name") or raw_event.get("host_ip")
+        if not host_value:
+            _handle_error(
+                strict,
+                "缺少主机 IP/主机名",
+                filename=channel,
+                line_no=record_no,
+                raw_id=raw_id,
+            )
+            continue
+
+        event_data = raw_event.get("event_data")
+        if not isinstance(event_data, dict):
+            event_data = {}
+
+        ingest_dt = None
+        if enable_time_alignment and clock_offset_ms == 0:
+            ingest_time = raw_event.get("ingest_time_utc")
+            if ingest_time:
+                ingest_dt = _parse_iso8601(
+                    ingest_time,
+                    filename=channel,
+                    line_no=record_no,
+                    strict=False,
+                )
+
+        normalized = _build_host_log_event(
+            raw_id=raw_id,
+            event_dt=event_dt,
+            ingest_dt=ingest_dt,
+            host_ip=str(host_value),
+            event_data=event_data,
+            record_context=None,
+            strict=strict,
+            record_ref=record_ref,
+            clock_offset_ms=clock_offset_ms,
+            enable_time_alignment=enable_time_alignment,
+            delays_ms=delays_ms,
+        )
+        if normalized:
+            results.append(normalized)
+
+    if delays_ms:
+        negative = sum(1 for value in delays_ms if value < 0)
+        large = sum(1 for value in delays_ms if value > INGEST_DELAY_WARN_MS)
+        if negative or large:
+            logger.warning(
+                "采集延迟异常 windows_eventlog: 负值=%d, 过大=%d, 最小=%d, 最大=%d",
                 negative,
                 large,
                 min(delays_ms),

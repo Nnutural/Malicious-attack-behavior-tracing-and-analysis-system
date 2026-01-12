@@ -6,7 +6,7 @@ import logging
 import shutil
 from pathlib import Path
 
-from .winlogbeat_config import generate_winlogbeat_config
+from .winlogbeat_config import generate_winlogbeat_config, generate_windows_collector_config
 
 
 logger = logging.getLogger(__name__)
@@ -15,12 +15,19 @@ logger = logging.getLogger(__name__)
 def _default_readme() -> str:
     return (
         "# Winlog 交付物\n\n"
-        "该目录包含主机日志采集与分析的交付物：\n\n"
-        "- winlogbeat.yml：Winlogbeat 文件输出配置。\n"
-        "- parser_winlogbeat.py：NDJSON 解析与归一化模块。\n"
+        "系统运行不依赖 Winlogbeat。该目录包含主机日志采集与分析的交付物：\n\n"
+        "- windows_collector_config.yml：系统内采集器配置模板（推荐路径）。\n"
+        "- winlogbeat.yml：Winlogbeat 参考配置（仅用于对照/报告）。\n"
+        "- collector_windows.py：Windows Event Log 采集器。\n"
+        "- state_store.py：断点续读状态存储。\n"
+        "- parser_winlogbeat.py：日志解析与归一化模块（兼容 NDJSON）。\n"
         "- session_rebuild.py：登录会话重建模块。\n"
         "- winlogbeat_config.py：配置生成器。\n"
-        "- __init__.py：包导出入口。\n"
+        "- __init__.py：包导出入口。\n\n"
+        "运行方式：\n"
+        "- 系统内采集（Windows）：调用 extract_host_logs_from_windows_eventlog。\n"
+        "- 兼容输入（NDJSON）：调用 extract_host_logs_from_winlogbeat_ndjson。\n"
+        "如读取 Security 通道被拒绝，请使用管理员权限或加入 Event Log Readers 组。\n"
     )
 
 
@@ -37,7 +44,7 @@ def _safe_copy(src: Path, dest: Path, overwrite: bool) -> None:
 
 
 def export_winlog_deliverables(out_dir: str | Path, *, overwrite: bool = False) -> dict:
-    """导出 Winlogbeat 配置与分析模块到交付目录。
+    """导出采集与分析模块到交付目录。
 
     Args:
         out_dir: 交付物输出目录。
@@ -51,13 +58,20 @@ def export_winlog_deliverables(out_dir: str | Path, *, overwrite: bool = False) 
 
     files: list[str] = []
 
-    config_text = generate_winlogbeat_config()
-    config_path = output_path / "winlogbeat.yml"
-    _safe_write(config_path, config_text, overwrite)
-    files.append(str(config_path))
+    collector_config_text = generate_windows_collector_config()
+    collector_config_path = output_path / "windows_collector_config.yml"
+    _safe_write(collector_config_path, collector_config_text, overwrite)
+    files.append(str(collector_config_path))
+
+    winlogbeat_config_text = generate_winlogbeat_config()
+    winlogbeat_config_path = output_path / "winlogbeat.yml"
+    _safe_write(winlogbeat_config_path, winlogbeat_config_text, overwrite)
+    files.append(str(winlogbeat_config_path))
 
     module_dir = Path(__file__).resolve().parent
     for name in [
+        "collector_windows.py",
+        "state_store.py",
         "parser_winlogbeat.py",
         "session_rebuild.py",
         "winlogbeat_config.py",

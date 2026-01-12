@@ -5,13 +5,17 @@ from pathlib import Path
 
 from flask import Blueprint, abort, current_app, render_template, request
 
-from utils.winlog import extract_host_logs_from_winlogbeat_ndjson
+from utils.winlog import (
+    extract_host_logs_from_winlogbeat_ndjson,
+    extract_host_logs_from_windows_eventlog,
+)
 
 bp = Blueprint('logs', __name__)
 
 logger = logging.getLogger(__name__)
 
 PAGE_SIZE = 20
+MAX_EVENTS_PER_LOAD = 200
 WINLOGBEAT_NDJSON_SOURCE = Path("winlogbeat_output")
 
 
@@ -72,6 +76,35 @@ def _map_event_to_log(event: dict, log_id: int) -> dict:
 
 def _load_logs() -> list[dict]:
     log = _get_logger()
+    log.warning("Winlog 调试：优先使用系统内采集。")
+    try:
+        events = extract_host_logs_from_windows_eventlog(
+            max_events=MAX_EVENTS_PER_LOAD,
+            strict=False,
+        )
+        if events:
+            log.warning("Winlog 调试：系统内采集到 %d 条事件。", len(events))
+            return [_map_event_to_log(event, idx + 1) for idx, event in enumerate(events)]
+        log.warning("Winlog 调试：系统内采集结果为空，尝试 NDJSON 输入。")
+    except PermissionError as exc:
+        log.warning("Winlog 调试：系统内采集权限不足：%s", exc)
+        try:
+            events = extract_host_logs_from_windows_eventlog(
+                channels=["System"],
+                max_events=MAX_EVENTS_PER_LOAD,
+                strict=False,
+            )
+            if events:
+                log.warning("Winlog 调试：System 通道采集到 %d 条事件。", len(events))
+                return [_map_event_to_log(event, idx + 1) for idx, event in enumerate(events)]
+            log.warning("Winlog 调试：System 通道采集结果为空，尝试 NDJSON 输入。")
+        except Exception as sub_exc:
+            log.warning("Winlog 调试：System 通道采集失败：%s", sub_exc)
+    except NotImplementedError as exc:
+        log.warning("Winlog 调试：系统内采集不可用：%s", exc)
+    except Exception as exc:
+        log.exception("Winlog 调试：系统内采集失败：%s", exc)
+
     search_paths = [
         WINLOGBEAT_NDJSON_SOURCE,
         Path("data/winlogbeat.ndjson"),
