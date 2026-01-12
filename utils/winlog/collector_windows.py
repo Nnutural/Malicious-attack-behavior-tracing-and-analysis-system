@@ -132,6 +132,17 @@ def _split_wevtutil_events(output: str) -> list[str]:
     return [ET.tostring(elem, encoding="unicode") for elem in root.findall(".//{*}Event")]
 
 
+def _parse_record_count(output: str) -> int | None:
+    for line in output.splitlines():
+        text = line.strip()
+        lower = text.lower()
+        if "recordcount" in lower or "记录数" in text or "记录计数" in text:
+            match = re.search(r"(\d+)", text)
+            if match:
+                return int(match.group(1))
+    return None
+
+
 class WindowsEventCollector:
     """Windows Event Log 系统内采集器（pywin32 优先，wevtutil 备选）。"""
 
@@ -143,6 +154,7 @@ class WindowsEventCollector:
         include_xml: bool = False,
         batch_size: int = 512,
         state_store: StateStore | None = None,
+        prefer_latest: bool = True,
         use_pywin32: bool = True,
         use_wevtutil_fallback: bool = True,
     ) -> None:
@@ -151,6 +163,7 @@ class WindowsEventCollector:
         self.include_xml = include_xml
         self.batch_size = batch_size
         self.state_store = state_store or StateStore()
+        self.prefer_latest = prefer_latest
         self.use_pywin32 = use_pywin32
         self.use_wevtutil_fallback = use_wevtutil_fallback
 
@@ -176,6 +189,13 @@ class WindowsEventCollector:
         """采集 Windows 事件日志，返回 RawEvent 列表。"""
         if platform.system().lower() != "windows":
             raise NotImplementedError("Windows Event Log 采集仅支持 Windows 平台")
+
+        counts = self.get_total_record_counts()
+        if counts:
+            total = sum(counts.values())
+            per_channel = ", ".join(f"{name}={value}" for name, value in counts.items())
+            logger.warning("可读取日志总数（通道统计）：%s", per_channel)
+            logger.warning("可读取日志总数（合计）：%d", total)
 
         results: list[dict] = []
         for channel in self.channels:
@@ -209,6 +229,8 @@ class WindowsEventCollector:
         last_record_id = int(state.get("last_record_id", 0) or 0)
         query = _build_xpath_query(self.event_ids, last_record_id if last_record_id > 0 else None)
         flags = win32evtlog.EvtQueryChannelPath
+        if self.prefer_latest and hasattr(win32evtlog, "EvtQueryReverseDirection"):
+            flags |= win32evtlog.EvtQueryReverseDirection
 
         handle = win32evtlog.EvtQuery(channel, flags, query)
         collected: list[dict] = []
@@ -241,14 +263,20 @@ class WindowsEventCollector:
 
         state_dir = self.state_store.path.parent
         bookmark_path = state_dir / f"{channel}.bookmark.xml"
-        command = ["wevtutil", "qe", channel, "/f:xml", f"/c:{max_events}", "/rd:false"]
+        read_direction = "/rd:true" if self.prefer_latest else "/rd:false"
+        command = ["wevtutil", "qe", channel, "/f:xml", f"/c:{max_events}", read_direction]
 
-        if bookmark_path.exists():
-            command.append(f"/bm:{bookmark_path}")
-            command.append(f"/sbm:{bookmark_path}")
-        elif self.event_ids or last_record_id:
-            query = _build_xpath_query(self.event_ids, last_record_id if last_record_id > 0 else None)
-            command.append(f"/q:{query}")
+        if self.prefer_latest:
+            if self.event_ids or last_record_id:
+                query = _build_xpath_query(self.event_ids, last_record_id if last_record_id > 0 else None)
+                command.append(f"/q:{query}")
+        else:
+            if bookmark_path.exists():
+                command.append(f"/bm:{bookmark_path}")
+                command.append(f"/sbm:{bookmark_path}")
+            elif self.event_ids or last_record_id:
+                query = _build_xpath_query(self.event_ids, last_record_id if last_record_id > 0 else None)
+                command.append(f"/q:{query}")
 
         try:
             output = subprocess.check_output(command, text=True, stderr=subprocess.STDOUT)
@@ -278,3 +306,25 @@ class WindowsEventCollector:
         if latest_record_id > last_record_id:
             self.save_bookmark(channel, {"last_record_id": latest_record_id, "bookmark_path": str(bookmark_path)})
         return collected
+
+    def get_total_record_counts(self) -> dict[str, int]:
+        """获取各通道可读取日志数量（通道总记录数）。"""
+        counts: dict[str, int] = {}
+        for channel in self.channels:
+            count = self._get_wevtutil_record_count(channel)
+            if count is not None:
+                counts[channel] = count
+        return counts
+
+    def _get_wevtutil_record_count(self, channel: str) -> int | None:
+        command = ["wevtutil", "gli", channel]
+        try:
+            output = subprocess.check_output(command, text=True, stderr=subprocess.STDOUT)
+        except subprocess.CalledProcessError as exc:
+            message = (exc.stdout or "").strip()
+            if "Access is denied" in message or "拒绝访问" in message:
+                logger.warning("读取 %s 日志统计被拒绝，请使用管理员权限或加入 Event Log Readers 组", channel)
+                return None
+            logger.warning("wevtutil gli 失败: %s", message)
+            return None
+        return _parse_record_count(output)
