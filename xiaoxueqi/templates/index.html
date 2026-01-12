@@ -3,46 +3,155 @@
 {% block title %}主页 - 攻击溯源分析系统{% endblock %}
 
 {% block content %}
-<section class="card hero">
+
+<!-- 顶部介绍区 -->
+<div class="card hero">
   <div>
     <h1 class="hero-title">恶意攻击行为溯源分析系统</h1>
-    <p class="muted">
-      基于主机日志、主机行为、网络流量进行多源融合分析，完成攻击链识别与溯源展示。
+    <p class="muted" style="margin-top:8px;">
+      本系统面向内网真实攻防场景，融合 <strong>主机日志</strong>、<strong>主机行为</strong> 与 <strong>网络流量</strong> 等多源数据，
+      通过时间对齐与关联分析，识别攻击链各阶段，并输出可解释的溯源结果（攻击路径、关键节点、C2 线索与归因建议）。
     </p>
 
-    <div class="btn-row">
+    <div class="btn-row" style="margin-top:14px;">
       <a class="btn" href="{{ url_for('dashboard.index') }}">进入仪表盘</a>
-      <a class="btn btn-secondary" href="{{ url_for('logs.list_logs') }}">查看日志</a>
-      <a class="btn btn-secondary" href="{{ url_for('attack.index') }}">查看攻击链</a>
-      <a class="btn btn-secondary" href="{{ url_for('traceback.index') }}">进入溯源</a>
+      <a class="btn btn-secondary" href="{{ url_for('logs.list_logs') }}">日志分析</a>
+      <a class="btn btn-secondary" href="{{ url_for('behavior.index') }}">行为分析</a>
+      <a class="btn btn-secondary" href="{{ url_for('traffic.index') }}">流量分析</a>
+      <a class="btn btn-secondary" href="{{ url_for('attack.index') }}">攻击链</a>
+      <a class="btn btn-secondary" href="{{ url_for('traceback.index') }}">溯源分析</a>
+    </div>
+
+    <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+      <span class="badge info">ATT&CK 映射</span>
+      <span class="badge info">多源时间线关联</span>
+      <span class="badge info">实体关系图</span>
+      <span class="badge info">攻击路径重建</span>
+      <span class="badge info">C2 线索分析</span>
+      <span class="badge info">APT 相似性匹配</span>
     </div>
   </div>
 
   <div class="hero-aside">
     <div class="kpi">
-      <div class="kpi-title">项目目标</div>
+      <div class="kpi-title">本次演示（最小闭环）</div>
       <ul class="kpi-list">
-        <li>采集与融合：日志 / 行为 / 流量</li>
-        <li>ATT&CK 映射：攻击链阶段展示</li>
-        <li>时间线关联：窗口聚合与因果推断</li>
-        <li>溯源输出：路径重建 + 画像 + C2</li>
+        <li>导入/展示样例数据（日志 / 行为 / 流量）</li>
+        <li>按照时间窗口聚合事件，生成攻击时间线</li>
+        <li>映射 ATT&CK 技术与战术阶段</li>
+        <li>生成溯源结果页（路径 + 画像 + C2）</li>
+      </ul>
+    </div>
+
+    <div class="kpi" style="margin-top:12px;">
+      <div class="kpi-title">系统特点</div>
+      <ul class="kpi-list">
+        <li>结构清晰：蓝图分模块，页面统一布局</li>
+        <li>可扩展：后续可对接真实采集与检测规则</li>
+        <li>可解释：每个结论可追溯到原始证据</li>
       </ul>
     </div>
   </div>
-</section>
+</div>
 
-<section class="grid">
+<!-- 功能模块说明 -->
+<div class="grid" style="margin-top:14px;">
   <div class="card">
-    <h3>主机日志</h3>
-    <p class="muted">日志范式化、实体提取、会话重建（后续实现）。</p>
+    <h3>主机日志（Host Logs）</h3>
+    <p class="muted">
+      汇总 Windows/Linux/安全设备等日志。后续将支持：日志范式化、实体提取（用户/IP/进程/文件/注册表）、登录会话重建、
+      异常登录识别与基于规则的初步告警。
+    </p>
+    <p style="margin-top:10px;">
+      典型输入：事件日志（4624/4625）、Sysmon、SSH 登录、Web 访问日志等。
+    </p>
   </div>
+
   <div class="card">
-    <h3>主机行为</h3>
-    <p class="muted">进程树/文件操作链路展示（后续实现）。</p>
+    <h3>主机行为（Host Behavior）</h3>
+    <p class="muted">
+      关注进程链与文件操作链。后续将支持：进程树构建、可疑命令行检测、敏感文件访问识别、
+      可疑父子进程模式（如 Office → Powershell）提示等。
+    </p>
+    <p style="margin-top:10px;">
+      典型输出：进程链路图、关键行为时间线、可疑行为摘要。
+    </p>
   </div>
+
   <div class="card">
-    <h3>网络流量</h3>
-    <p class="muted">会话统计、异常流量分析（后续实现）。</p>
+    <h3>网络流量（Network Traffic）</h3>
+    <p class="muted">
+      通过会话重建与流量特征统计，辅助识别横向移动、外连 C2、数据外传等行为。
+      后续将支持：会话聚合（五元组）、异常端口/协议、DNS 隧道迹象等检测。
+    </p>
+    <p style="margin-top:10px;">
+      典型输入：pcap、NetFlow、Zeek/Suricata 输出等。
+    </p>
   </div>
-</section>
+</div>
+
+<!-- 分析与溯源流程 -->
+<div class="card" style="margin-top:14px;">
+  <h3>分析流程（可解释溯源）</h3>
+  <p class="muted">
+    系统采用“多源融合 → 关联分析 → ATT&CK 映射 → 溯源输出”的流程。每一步都保留证据链接，确保结论可复现。
+  </p>
+
+  <div class="table-wrap" style="margin-top:10px;">
+    <table>
+      <thead>
+        <tr>
+          <th>阶段</th>
+          <th>目标</th>
+          <th>输入</th>
+          <th>输出</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>采集与清洗</td>
+          <td>统一格式与时间轴</td>
+          <td>日志 / 行为 / 流量</td>
+          <td>统一事件范式、实体列表</td>
+        </tr>
+        <tr>
+          <td>关联分析</td>
+          <td>找出同一攻击活动的事件集合</td>
+          <td>统一事件 + 时间窗口</td>
+          <td>聚合事件簇、关键因果链</td>
+        </tr>
+        <tr>
+          <td>ATT&CK 映射</td>
+          <td>识别攻击链阶段与技术</td>
+          <td>事件簇 + 技术库/规则</td>
+          <td>战术阶段、技术 ID、统计</td>
+        </tr>
+        <tr>
+          <td>溯源输出</td>
+          <td>重建路径、提取画像与线索</td>
+          <td>攻击链 + 实体关系</td>
+          <td>攻击路径、C2、归因建议</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- 演示提示与使用说明 -->
+<div class="card" style="margin-top:14px;">
+  <h3>快速使用说明</h3>
+  <ul style="margin:10px 0 0; padding-left:18px;">
+    <li><strong>仪表盘：</strong>查看全局统计与最新攻击事件摘要。</li>
+    <li><strong>日志分析：</strong>查看原始日志、定位关键事件并进入详情页。</li>
+    <li><strong>行为分析：</strong>查看进程链/文件操作的可视化占位（后续接入）。</li>
+    <li><strong>流量分析：</strong>查看网络会话与外联线索的占位展示（后续接入）。</li>
+    <li><strong>攻击链：</strong>展示 ATT&CK 映射与阶段划分（后续接入规则/算法）。</li>
+    <li><strong>溯源分析：</strong>最终溯源结果呈现：路径 + 画像 + C2 + 归因建议。</li>
+  </ul>
+
+  <p class="muted" style="margin-top:10px;">
+    提示：当前页面内容为展示用的“框架与占位”，后续你们只需要把数据接口与页面渲染填进去即可完成演示闭环。
+  </p>
+</div>
+
 {% endblock %}
