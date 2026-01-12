@@ -57,3 +57,15 @@ python -c "from utils.winlog import extract_host_logs_from_winlogbeat_ndjson as 
 4624 打开会话，4634/4647 关闭会话
 超过 session_timeout_sec 未关闭则标记 timeout
 若同 session_id 出现时间倒退/冲突，切分为新会话
+
+# TODO
+## 1. 只能在本机运行 无法统一不同主机和设备的日志
+如果需要不同主机上运行该部分，则应每个部分起码实现了该日志采集模块，另外也应是指不同的存储方式以区分
+
+## 2. 限制了200条日志采集
+
+## 3. 读取数据库显示序号为从大到小
+
+## 4. 数据较为重复无价值 如何提取重要的有威胁消息？
+
+## 5. 数据存储并未加密
