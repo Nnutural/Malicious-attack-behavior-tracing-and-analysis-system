@@ -1,0 +1,11 @@
+little_term.code-workspace
+.idea/
+__pycache__/
+*.pyc
+*.pyo
+tempCodeRunnerFile.py
+utils/winlog/.state/
+*.sqlite
+.venv
+requirements.txt
+utils/winlog/.state
