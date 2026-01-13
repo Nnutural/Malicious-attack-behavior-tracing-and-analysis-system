@@ -3,7 +3,7 @@
 说明：
 - 客户端运行 utils/behavior_monitor/client_agent.py 上报到 /behavior/ingest
 - 行为分析页面只负责展示/筛选/分页/树与时间线数据
-- 为避免误操作，此文件将 /behavior/start /behavior/stop 禁用（不再启动服务器本机监听）
+- /behavior/start /behavior/stop 禁用（避免误监听服务器）
 """
 
 from __future__ import annotations
@@ -43,7 +43,6 @@ def index():
 
 @bp.route("/start", methods=["POST"])
 def start():
-    # 禁用服务器本机监听，防止误操作混入服务器数据
     return jsonify({"ok": False, "message": "已切换为客户端 Agent 上报模式：页面不再启动服务器本机监听。"}), 400
 
 
@@ -54,27 +53,13 @@ def stop():
 
 @bp.route("/status", methods=["GET"])
 def status():
-    # 展示模式无需服务器监听状态
     return jsonify(
-        {
-            "running": False,
-            "started_at": None,
-            "uptime_sec": 0,
-            "counters": {"inserted": 0, "skipped": 0, "errors": 0},
-        }
+        {"running": False, "started_at": None, "uptime_sec": 0, "counters": {"inserted": 0, "skipped": 0, "errors": 0}}
     )
 
 
 @bp.route("/ingest", methods=["POST"])
 def ingest():
-    """
-    客户端 Agent 上报入口。
-    1) 单条：
-       { "event": {...}, "host_name": "client-01", "raw": "..." }
-    2) 多条：
-       { "events": [{...}, {...}], "host_name": "client-01" }
-    返回：inserted/skipped/errors
-    """
     data = request.get_json(silent=True) or {}
     host_name = (data.get("host_name") or "").strip() or None
 
@@ -106,10 +91,6 @@ def ingest():
 
 @bp.route("/recent", methods=["GET"])
 def recent():
-    """
-    分页返回最近行为事件：
-    ?page=1&page_size=20&host_name=xxx
-    """
     host_name = (request.args.get("host_name") or "").strip() or None
 
     page = request.args.get("page", 1, type=int)
@@ -134,6 +115,23 @@ def recent():
 def _row_to_item(r) -> dict:
     ev = parse_result_json(r.result)
     ent = ev.get("entities") or {}
+
+    # 兼容新旧字段
+    file_path = ent.get("file_path") or ent.get("target_file")
+    dst_ip = ent.get("dst_ip") or ent.get("target_ip")
+    dst_port = ent.get("dst_port")
+    proto = ent.get("protocol")
+
+    target_display = ""
+    if file_path:
+        target_display = str(file_path)
+    elif dst_ip:
+        target_display = str(dst_ip)
+        if dst_port:
+            target_display = f"{target_display}:{dst_port}"
+        if proto:
+            target_display = f"{target_display} ({proto})"
+
     return {
         "id": r.id,
         "timestamp": str(ev.get("timestamp") or ""),
@@ -144,8 +142,10 @@ def _row_to_item(r) -> dict:
         "pid": ent.get("pid"),
         "ppid": ent.get("parent_pid"),
         "cmd": str(ent.get("command_line") or ""),
-        "target_file": ent.get("target_file"),
-        "target_ip": ent.get("target_ip"),
+        "target": target_display,
+        "user": ent.get("user"),
+        "hash": ent.get("hash"),
+        "listen_ports": ent.get("listen_ports"),
         "raw": r.content,
         "event": ev,
     }
@@ -204,16 +204,15 @@ def file_timeline():
                 "event_type": ev.get("event_type"),
                 "process_name": ent.get("process_name"),
                 "pid": ent.get("pid"),
-                "target_file": ent.get("target_file"),
-                "file_hash": ent.get("file_hash"),
+                "file_path": ent.get("file_path") or ent.get("target_file"),
+                "hash": ent.get("hash") or ent.get("file_hash"),
+                "user": ent.get("user"),
             }
         )
 
     events.sort(key=lambda x: x.get("timestamp") or "")
     return jsonify({"ok": True, "events": events})
 
-# 只展示关键新增路由，其余保持你当前文件不变
-# 在文件中加入这个路由即可
 
 @bp.route("/host_names", methods=["GET"])
 def host_names():

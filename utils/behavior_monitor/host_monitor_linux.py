@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-HostGuard Linux Engine (Full Visibility Edition)
-================================================
-[核心改进]
-1. 全量采集: 取消关键词过滤，实现“系统调用全拦截”。
-2. 进程链增强: 强制提取 PID/PPID，满足“进程行为链分析”需求。
-3. 内存分析接口: 增加对 ptrace/mmap 的识别逻辑。
+HostGuard Linux Engine (Full Visibility Edition) - schema v2
+
+从 Falco JSON line 生成与你的新接口对齐的 event dict（存入 HostBehaviors.result）：
+- entities 新字段：hash/user/file_path/listen_ports
+- network 字段：src_ip/src_port/dst_ip/dst_port/protocol
+- registry 字段 Linux 先留空（除非后续接 auditd）
 """
 
 import json
@@ -21,16 +21,15 @@ from typing import Dict, Optional, Callable
 LOG_FILE_PATH = "/var/log/falco_events.json"
 
 
-# [数据标准] 对应毕设四大模块
 class EventType:
-    PROCESS_CREATE = "process_create"  # 对应：进程行为链分析
-    FILE_CREATE = "file_create"  # 对应：文件操作监控
-    FILE_MODIFY = "file_modify"  # 对应：文件操作监控
-    FILE_DELETE = "file_delete"  # 对应：文件操作监控
-    FILE_READ = "file_read"  # 对应：文件操作监控 (读取)
-    PROCESS_INJECTION = "process_injection"  # 对应：内存行为分析
-    NETWORK_CONNECT = "network_connection"  # 对应：系统调用拦截(网络)
-    SYSTEM_CALL = "system_call"  # 对应：系统调用拦截(通用)
+    PROCESS_CREATE = "process_create"
+    FILE_CREATE = "file_create"
+    FILE_MODIFY = "file_modify"
+    FILE_DELETE = "file_delete"
+    FILE_READ = "file_read"
+    PROCESS_INJECTION = "process_injection"
+    NETWORK_CONNECT = "network_connection"
+    SYSTEM_CALL = "system_call"
 
 
 class ActionType:
@@ -52,7 +51,7 @@ class ForensicsUtils:
             ip = s.getsockname()[0]
             s.close()
             return ip
-        except:
+        except Exception:
             return "127.0.0.1"
 
     @staticmethod
@@ -60,15 +59,16 @@ class ForensicsUtils:
         return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     @staticmethod
-    def calculate_sha256(filepath: str) -> str:
-        if not filepath or not os.path.isfile(filepath): return None
+    def calculate_sha256(filepath: str) -> Optional[str]:
+        if not filepath or not os.path.isfile(filepath):
+            return None
         try:
             sha256 = hashlib.sha256()
             with open(filepath, "rb") as f:
                 for block in iter(lambda: f.read(4096), b""):
                     sha256.update(block)
             return sha256.hexdigest()
-        except:
+        except Exception:
             return None
 
     @staticmethod
@@ -81,14 +81,25 @@ class ForensicsUtils:
         return proc_name
 
 
+def _to_int_or_none(value) -> int | None:
+    try:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        return int(text)
+    except Exception:
+        return None
+
+
 class HostBehaviorEngine:
     def __init__(self):
         self._dedup_cache = {}
         self._lock = threading.Lock()
 
     def _is_duplicate(self, alert: Dict) -> bool:
-        # 放宽去重策略：只在 0.5秒 内去重，避免丢失快速连续的进程链
-        sig = f"{alert['event_type']}:{alert['entities'].get('command_line', '')}"
+        sig = f"{alert['event_type']}:{alert['entities'].get('command_line','')}"
         now = time.time()
         with self._lock:
             last_time = self._dedup_cache.get(sig, 0)
@@ -100,94 +111,115 @@ class HostBehaviorEngine:
     def analyze_event(self, line: str) -> Optional[Dict]:
         try:
             raw = json.loads(line)
-            output = raw.get("output", "")
+            output = raw.get("output", "") or ""
             fields = raw.get("output_fields", {}) or {}
-            rule = raw.get("rule", "")
+            rule = raw.get("rule", "") or ""
 
-            # --- 基础字段提取 ---
             cmd = str(fields.get("proc.cmdline", "") or "")
             proc = str(fields.get("proc.name", "") or "")
 
-            # [关键点2] 进程行为链核心数据：PID 和 PPID
             pid = int(fields.get("proc.pid", 0) or 0)
-            ppid = int(fields.get("proc.ppid", 0) or 0)  # Falco 原生支持 ppid
+            ppid = int(fields.get("proc.ppid", 0) or 0)
 
             if (not proc or proc == "unknown") and cmd:
                 proc = cmd.split()[0]
             proc = ForensicsUtils.strip_sudo(proc, cmd)
 
-            # 初始化标准结构
+            user = fields.get("user.name") or fields.get("user") or None
+            fd_name = fields.get("fd.name") or None
+
+            src_ip = fields.get("fd.sip") or fields.get("fd.cip") or None
+            dst_ip = fields.get("fd.dip") or None
+            src_port = _to_int_or_none(fields.get("fd.sport"))
+            dst_port = _to_int_or_none(fields.get("fd.dport"))
+            proto = fields.get("fd.l4proto") or None
+
+            entities = {
+                "process_name": proc,
+                "pid": pid,
+                "parent_process": "unknown",
+                "parent_pid": ppid,
+                "command_line": cmd,
+
+                # 新增字段
+                "hash": None,
+                "user": user,
+                "file_path": None,
+                "listen_ports": [],
+
+                # registry（Linux 暂不实现）
+                "registry_key": None,
+                "registry_value_name": None,
+                "registry_value_data": None,
+
+                # network
+                "src_ip": src_ip,
+                "src_port": src_port,
+                "dst_ip": dst_ip,
+                "dst_port": dst_port,
+                "protocol": proto,
+            }
+
             alert = {
                 "data_source": "host_behavior",
                 "timestamp": ForensicsUtils.get_timestamp(),
                 "host_ip": ForensicsUtils.get_host_ip(),
-                "event_type": "unknown",  # 稍后填充
-                "action": "unknown",
-                "entities": {
-                    "process_name": proc,
-                    "pid": pid,
-                    "parent_process": "unknown",  # 暂时无法通过单条日志获取父进程名，需后端关联
-                    "parent_pid": ppid,  # [重要] 这是一个 Edge 关系
-                    "command_line": cmd,
-                    "file_hash": None,
-                    "target_file": None,
-                    "target_ip": None
-                },
-                "behavior_features": {
-                    "is_abnormal_parent": False,
-                    "has_memory_injection": False
-                },
-                "description": output
+                "event_type": "unknown",
+                "action": ActionType.UNKNOWN,
+                "entities": entities,
+                "behavior_features": {"is_abnormal_parent": False, "has_memory_injection": False},
+                "description": output,
             }
 
-            # --- [逻辑映射] 满足毕设 4 点要求 ---
+            lower_rule = rule.lower()
+            lower_out = output.lower()
 
-            # 1. [内存行为分析] 检测异常代码注入
-            if "process_injection" in rule.lower() or "ptrace" in output.lower():
+            # 1) 注入
+            if "process_injection" in lower_rule or "ptrace" in lower_out:
                 alert["event_type"] = EventType.PROCESS_INJECTION
                 alert["action"] = ActionType.INJECTION
                 alert["behavior_features"]["has_memory_injection"] = True
 
-            # 2. [系统调用拦截 - 网络]
-            elif "Network" in rule or "connection" in output:
+            # 2) 网络
+            elif "network" in lower_rule or "network" in output or "connection" in lower_out:
                 alert["event_type"] = EventType.NETWORK_CONNECT
                 alert["action"] = ActionType.CONNECTION
-                # 尝试提取IP
-                ip_match = re.search(r"(\d{1,3}(\.\d{1,3}){3})", cmd)
-                if ip_match: alert["entities"]["target_ip"] = ip_match.group(1)
 
-            # 3. [文件操作监控] 创建/修改/删除/读取
-            elif "File" in rule or "file" in rule.lower():
-                target_file = cmd.split()[-1] if cmd else ""
-                alert["entities"]["target_file"] = target_file
+                # 兜底从 cmd 抓 ip
+                if not entities["dst_ip"]:
+                    ip_match = re.search(r"(\d{1,3}(\.\d{1,3}){3})", cmd)
+                    if ip_match:
+                        entities["dst_ip"] = ip_match.group(1)
 
-                if "creation" in output or "create" in rule.lower():
+            # 3) 文件
+            elif "file" in lower_rule:
+                file_path = fd_name or (cmd.split()[-1] if cmd else None)
+                entities["file_path"] = file_path
+
+                if "creation" in lower_out or "create" in lower_rule:
                     alert["event_type"] = EventType.FILE_CREATE
                     alert["action"] = ActionType.MODIFICATION
-                    alert["entities"]["file_hash"] = ForensicsUtils.calculate_sha256(target_file)
-                elif "delete" in output or "remove" in rule.lower():
+                elif "delete" in lower_out or "remove" in lower_rule or "rm " in cmd:
                     alert["event_type"] = EventType.FILE_DELETE
                     alert["action"] = ActionType.DELETION
-                elif "read" in output or "access" in rule.lower():
-                    alert["event_type"] = EventType.FILE_READ  # 敏感文件读取
+                elif "read" in lower_out or "access" in lower_rule:
+                    alert["event_type"] = EventType.FILE_READ
                     alert["action"] = ActionType.ACCESS
                 else:
                     alert["event_type"] = EventType.FILE_MODIFY
                     alert["action"] = ActionType.MODIFICATION
 
-            # 4. [进程行为链分析] 捕获所有进程启动
-            # 这是一个兜底逻辑：只要不是上面的特定类型，且有 PID，就算作进程创建
-            # 这样保证了 "ls", "ps" 等普通命令也能被记录，形成完整的树
+                entities["hash"] = ForensicsUtils.calculate_sha256(file_path) if file_path else None
+
+            # 4) 兜底：进程启动
             else:
                 alert["event_type"] = EventType.PROCESS_CREATE
                 alert["action"] = ActionType.EXECUTION
-
-                # 简单的异常父子判定 (例如: python 启动了 bash)
                 if "python" in cmd and ("sh" in cmd or "bash" in cmd):
                     alert["behavior_features"]["is_abnormal_parent"] = True
 
-            # 去重
-            if self._is_duplicate(alert): return None
+            if self._is_duplicate(alert):
+                return None
 
             return alert
         except Exception:
@@ -195,13 +227,14 @@ class HostBehaviorEngine:
 
 
 def run_forever(
-        *,
-        on_event: Callable[[dict, str], None],
-        stop_event: threading.Event,
-        log_path: str = LOG_FILE_PATH,
+    *,
+    on_event: Callable[[dict, str], None],
+    stop_event: threading.Event,
+    log_path: str = LOG_FILE_PATH,
 ) -> None:
     engine = HostBehaviorEngine()
-    if not os.path.exists(log_path): open(log_path, "a").close()
+    if not os.path.exists(log_path):
+        open(log_path, "a").close()
 
     with open(log_path, "r", encoding="utf-8", errors="ignore") as f_in:
         f_in.seek(0, 2)
@@ -215,18 +248,5 @@ def run_forever(
             if event:
                 try:
                     on_event(event, line)
-                except:
+                except Exception:
                     pass
-
-
-if __name__ == "__main__":
-    def print_event(event, raw):
-        print(f"[LINUX] {json.dumps([event], ensure_ascii=False)}")
-
-
-    print(f"[*] HostGuard Linux Engine (Full Visibility)...")
-    stop_event = threading.Event()
-    try:
-        run_forever(on_event=print_event, stop_event=stop_event)
-    except KeyboardInterrupt:
-        pass
