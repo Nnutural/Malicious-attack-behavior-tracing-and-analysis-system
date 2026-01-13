@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import platform
 from typing import Any
 
 from utils.winlog.parser_winlogbeat import extract_host_logs_from_windows_eventlog
@@ -69,6 +70,8 @@ def ingest_windows_eventlog_to_sqlserver(
         # content：完整原文，���先 xml，兜底 pretty JSON
         content = raw_xml or json.dumps(ev, ensure_ascii=False, sort_keys=True, indent=2)
         host_name = str(computer_name).strip() if computer_name else None
+        if not host_name:
+            host_name = platform.node().strip() or None
 
         try:
             insert_hostlog(result_json=result_json, content=content, event_hash=event_hash, host_name=host_name, conn_str=conn_str)
