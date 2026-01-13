@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """
 Linux 主机行为监控：
-- 读取 Falco JSON 日志（/var/log/falco_events.json）
+- 读取 Falco JSON 日志（默认 /var/log/falco_events.json）
 - analyze_event: 将一行 falco JSON 转为标准 event dict（host_behavior）
 - run_forever: tail-f 监听，解析出 event 后回调 on_event(event, raw_line)
 
-注意：本文件不再写 host_data.json（路线 A：直接回调入库）
+改进：
+- 新增 read_last_lines 参数：启动时先回放最后 N 行（默认 200），避免“启动后一直等不到新行”。
 """
 
 import json
@@ -106,11 +107,9 @@ class HostBehaviorEngine:
             cmd = str(fields.get("proc.cmdline", "") or "")
             proc = str(fields.get("proc.name", "") or "")
 
-            # 关键：补 pid / ppid（用于进程树）
             pid = int(fields.get("proc.pid", 0) or 0)
             ppid = int(fields.get("proc.ppid", 0) or 0)
 
-            # 进程名兜底 + sudo 清洗
             if (not proc or proc == "unknown") and cmd:
                 proc = cmd.split()[0]
             proc = ForensicsUtils.strip_sudo(proc, cmd)
@@ -138,7 +137,6 @@ class HostBehaviorEngine:
                 "description": output,
             }
 
-            # 映射逻辑（保持你原来的规则）
             target_file = ""
 
             if "PTRACE" in output or "strace" in cmd:
@@ -146,7 +144,7 @@ class HostBehaviorEngine:
                 alert["action"] = ActionType.INJECTION
                 alert["behavior_features"]["has_memory_injection"] = True
 
-            elif "Network" in output or any(x in cmd for x in ["nc ", "ncat ", "curl "]):
+            elif "Network" in output or any(x in cmd for x in ["nc ", "ncat ", "curl ", "wget "]):
                 alert["event_type"] = EventType.NETWORK_CONNECT
                 alert["action"] = ActionType.CONNECTION
                 ip_match = re.search(r"(\d{1,3}(\.\d{1,3}){3})", cmd)
@@ -171,7 +169,6 @@ class HostBehaviorEngine:
                 if ">>" in cmd:
                     target_file = cmd.split(">>")[1].strip()
                 elif ">" in cmd:
-                    # 简单处理：echo xxx > file
                     target_file = cmd.split(">")[1].strip()
                 elif "chmod" in cmd:
                     target_file = cmd.split()[-1]
@@ -209,20 +206,52 @@ class HostBehaviorEngine:
             return None
 
 
+def _read_last_lines(path: str, n: int) -> list[str]:
+    if n <= 0:
+        return []
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            block = 4096
+            data = b""
+            while size > 0 and data.count(b"\n") <= n:
+                step = block if size >= block else size
+                f.seek(-step, os.SEEK_CUR)
+                data = f.read(step) + data
+                f.seek(-step, os.SEEK_CUR)
+                size -= step
+        lines = data.splitlines()[-n:]
+        return [ln.decode("utf-8", errors="ignore") for ln in lines]
+    except Exception:
+        return []
+
+
 def run_forever(
     *,
     on_event: Callable[[dict, str], None],
     stop_event: threading.Event,
     log_path: str = LOG_FILE_PATH,
+    read_last_lines: int = 200,
 ) -> None:
     """
-    tail -f Falco 输出文件；每读到一行，解析后 on_event(event_dict, raw_line)
+    tail -f Falco 输出文件；启动时回放最后 N 行（默认 200），随后持续追尾。
     """
     engine = HostBehaviorEngine()
 
-    # 确保文件存在
     if not os.path.exists(log_path):
         open(log_path, "a").close()
+
+    # 启动时先回放最后 N 行，避免“启动后一直等不到新事件”
+    for line in _read_last_lines(log_path, read_last_lines):
+        if stop_event.is_set():
+            return
+        event = engine.analyze_event(line)
+        if event:
+            try:
+                on_event(event, line)
+            except Exception:
+                pass
 
     with open(log_path, "r", encoding="utf-8", errors="ignore") as f_in:
         f_in.seek(0, 2)  # 追尾
@@ -231,11 +260,9 @@ def run_forever(
             if not line:
                 time.sleep(0.1)
                 continue
-
             event = engine.analyze_event(line)
             if event:
                 try:
                     on_event(event, line)
                 except Exception:
-                    # 避免回调异常导致线程退出
                     pass
