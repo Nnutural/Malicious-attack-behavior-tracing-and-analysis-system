@@ -1,0 +1,150 @@
+# -----------------------------------------------------------------------------
+# 1. 主机日志规则 (Host Log Rules)
+# 对应题目功能：身份溯源、登录会话重建、暴力破解检测、权限提升检测
+# -----------------------------------------------------------------------------
+
+- rule_id: "HL_001_BruteForce"
+  data_source: "host_log"
+  attack_mapping:
+    tactic_id: "TA0006"
+    tactic_name: "Credential Access"
+    technique_id: "T1110"
+    technique_name: "Brute Force"
+  trigger:
+    event_type: "user_logon_failed"
+    threshold: 5
+  # 简单阈值逻辑通常在流计算引擎处理，此处假设单条高频失败日志或聚合结果
+  description: "Detects multiple failed login attempts indicative of brute force."
+
+- rule_id: "HL_002_AccountManipulation"
+  data_source: "host_log"
+  attack_mapping:
+    tactic_id: "TA0003"
+    tactic_name: "Persistence"
+    technique_id: "T1098"
+    technique_name: "Account Manipulation"
+  trigger:
+    event_type: "group_membership_add"
+    entities:
+      target_group: ["Administrators", "root", "wheel"] # 伪代码逻辑，需匹配实体字段
+  description: "Detects user addition to privileged groups."
+
+- rule_id: "HL_003_LogClearing"
+  data_source: "host_log"
+  attack_mapping:
+    tactic_id: "TA0005"
+    tactic_name: "Defense Evasion"
+    technique_id: "T1070"
+    technique_name: "Indicator Removal on Host"
+  trigger:
+    event_type: "log_clear"
+  description: "Detects clearing of system logs to hide tracks."
+
+# -----------------------------------------------------------------------------
+# 2. 主机行为规则 (Host Behavior Rules)
+# 对应题目功能：进程行为链分析、内存行为分析、系统调用拦截、文件操作监控
+# -----------------------------------------------------------------------------
+
+- rule_id: "HB_001_AbnormalParent"
+  data_source: "host_behavior"
+  attack_mapping:
+    tactic_id: "TA0002"
+    tactic_name: "Execution"
+    technique_id: "T1059"
+    technique_name: "Command and Scripting Interpreter"
+  trigger:
+    event_type: "process_create"
+    behavior_features:
+      is_abnormal_parent: true # 直接利用接口中的特征字段
+  description: "Detects shell execution from abnormal parent processes (e.g., Word spawning CMD)."
+
+- rule_id: "HB_002_ProcessInjection"
+  data_source: "host_behavior"
+  attack_mapping:
+    tactic_id: "TA0005"
+    tactic_name: "Defense Evasion"
+    technique_id: "T1055"
+    technique_name: "Process Injection"
+  trigger:
+    event_type: "process_injection" 
+    # 或者
+    behavior_features:
+      has_memory_injection: true
+  description: "Detects code injection into other processes (e.g., CreateRemoteThread)."
+
+- rule_id: "HB_003_Persistence_Registry"
+  data_source: "host_behavior"
+  attack_mapping:
+    tactic_id: "TA0003"
+    tactic_name: "Persistence"
+    technique_id: "T1547.001"
+    technique_name: "Registry Run Keys / Startup Folder"
+  trigger:
+    event_type: "registry_set_value"
+    # 后续代码需检查路径是否包含 Run/RunOnce
+  description: "Detects modification of registry run keys for persistence."
+
+- rule_id: "HB_004_Webshell_Creation"
+  data_source: "host_behavior"
+  attack_mapping:
+    tactic_id: "TA0003"
+    tactic_name: "Persistence"
+    technique_id: "T1505.003"
+    technique_name: "Server Software Component: Web Shell"
+  trigger:
+    event_type: "file_create"
+    # 此处假设 entities.file_extension 在预处理中被提取，或需在代码正则匹配
+    condition_extra: "file_extension in ['jsp', 'php', 'asp', 'aspx']" 
+  description: "Detects creation of web shell scripts."
+
+# -----------------------------------------------------------------------------
+# 3. 网络流量规则 (Network Traffic Rules)
+# 对应题目功能：隐蔽信道检测、数据外传检测、C2基础设施关联
+# -----------------------------------------------------------------------------
+
+- rule_id: "NT_001_DNSTunneling"
+  data_source: "network_traffic"
+  attack_mapping:
+    tactic_id: "TA0011"
+    tactic_name: "Command and Control"
+    technique_id: "T1071.004"
+    technique_name: "Application Layer Protocol: DNS"
+  trigger:
+    event_type: "dns_tunnel_suspected"
+    traffic_features:
+      is_covert_channel: true
+      channel_type: "DNS Tunneling"
+  description: "Detects C2 communication over DNS tunneling."
+
+- rule_id: "NT_002_ICMPTunneling"
+  data_source: "network_traffic"
+  attack_mapping:
+    tactic_id: "TA0011"
+    tactic_name: "Command and Control"
+    technique_id: "T1095"
+    technique_name: "Non-Application Layer Protocol"
+  trigger:
+    event_type: "icmp_tunnel_suspected"
+  description: "Detects C2 communication over ICMP (Ping Tunnel)."
+
+- rule_id: "NT_003_DataExfiltration"
+  data_source: "network_traffic"
+  attack_mapping:
+    tactic_id: "TA0010"
+    tactic_name: "Exfiltration"
+    technique_id: "T1048"
+    technique_name: "Exfiltration Over Alternative Protocol"
+  trigger:
+    event_type: "data_exfiltration"
+  description: "Detects large volume of data being sent to external IP."
+
+- rule_id: "NT_004_PortScanning"
+  data_source: "network_traffic"
+  attack_mapping:
+    tactic_id: "TA0007"
+    tactic_name: "Discovery"
+    technique_id: "T1046"
+    technique_name: "Network Service Scanning"
+  trigger:
+    event_type: "port_scan"
+  description: "Detects internal reconnaissance via port scanning."
