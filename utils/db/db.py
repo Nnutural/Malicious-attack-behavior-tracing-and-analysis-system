@@ -14,14 +14,14 @@ import pyodbc
 from config import Config
 
 
-def get_conn():
+def get_conn(conn_str: str | None = None):
     """获取一个新的数据库连接"""
-    return pyodbc.connect(Config.SQL_CONN_STR)
+    return pyodbc.connect(conn_str or Config.SQL_CONN_STR)
 
 
-def fetch_one(sql, params=None):
+def fetch_one(sql, params=None, conn_str: str | None = None):
     """查询一条，返回 dict；没有数据返回 None"""
-    conn = get_conn()
+    conn = get_conn(conn_str)
     cursor = conn.cursor()
     cursor.execute(sql, params or [])
     row = cursor.fetchone()
@@ -36,9 +36,9 @@ def fetch_one(sql, params=None):
     return result
 
 
-def fetch_all(sql, params=None):
+def fetch_all(sql, params=None, conn_str: str | None = None):
     """查询多条，返回 dict 列表"""
-    conn = get_conn()
+    conn = get_conn(conn_str)
     cursor = conn.cursor()
 
     cursor.execute(sql, params or [])
@@ -52,12 +52,12 @@ def fetch_all(sql, params=None):
     return result
 
 
-def execute(sql, params=None):
+def execute(sql, params=None, conn_str: str | None = None):
     """
     执行写操作（INSERT/UPDATE/DELETE）
     返回：受影响行数
     """
-    conn = get_conn()
+    conn = get_conn(conn_str)
     cursor = conn.cursor()
 
     cursor.execute(sql, params or [])

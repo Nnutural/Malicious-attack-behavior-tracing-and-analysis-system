@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import platform
 from typing import Any
 
 from utils.winlog.parser_winlogbeat import extract_host_logs_from_windows_eventlog
@@ -26,7 +27,25 @@ def _sha256_hex(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def ingest_windows_eventlog_to_sqlserver(*, max_events: int = 200, strict: bool = False) -> dict[str, Any]:
+def ingest_windows_eventlog_to_sqlserver(
+    *,
+    max_events: int = 200,
+    strict: bool = False,
+    conn_str: str | None = None,
+) -> dict[str, Any]:
+    """
+    采集 Windows Event Log 并写入 dbo.HostLogs。
+
+    conn_str 可用于覆盖默认 SQL Server 连接串。
+
+    返回：
+    {
+      "collected": int,
+      "inserted": int,
+      "skipped": int,
+      "errors": int
+    }
+    """
     events = extract_host_logs_from_windows_eventlog(
         max_events=max_events,
         strict=strict,
@@ -51,9 +70,11 @@ def ingest_windows_eventlog_to_sqlserver(*, max_events: int = 200, strict: bool 
         # content：完整原文，���先 xml，兜底 pretty JSON
         content = raw_xml or json.dumps(ev, ensure_ascii=False, sort_keys=True, indent=2)
         host_name = str(computer_name).strip() if computer_name else None
+        if not host_name:
+            host_name = platform.node().strip() or None
 
         try:
-            insert_hostlog(result_json=result_json, content=content, event_hash=event_hash, host_name=host_name)
+            insert_hostlog(result_json=result_json, content=content, event_hash=event_hash, host_name=host_name, conn_str=conn_str)
             inserted += 1
         except Exception as exc:
             msg = str(exc)
@@ -63,4 +84,9 @@ def ingest_windows_eventlog_to_sqlserver(*, max_events: int = 200, strict: bool 
             errors += 1
             logger.warning("插入 HostLogs 失败: %s", exc)
 
-    return {"collected": len(events), "inserted": inserted, "skipped": skipped, "errors": errors}
+    return {
+        "collected": len(events),
+        "inserted": inserted,
+        "skipped": skipped,
+        "errors": errors,
+    }

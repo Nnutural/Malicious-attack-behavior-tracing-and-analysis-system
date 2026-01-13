@@ -18,6 +18,20 @@
   }
   .toolbar-left, .toolbar-right { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
 
+  .db-form {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .db-label { font-size: 13px; color: #555; }
+  .db-input {
+    border: 1px solid #e6e6e6;
+    border-radius: 8px;
+    padding: 8px 10px;
+    min-width: 180px;
+  }
+
   .btn {
     border: 1px solid #2b6cb0;
     background: #3182ce;
@@ -31,6 +45,12 @@
     gap: 8px;
   }
   .btn:hover { background: #2b6cb0; }
+  .btn:active { transform: translateY(1px); }
+  .btn.secondary {
+    border-color: #475569;
+    background: #64748b;
+  }
+  .btn.secondary:hover { background: #475569; }
 
   .btn-ghost{
     border: 1px solid #e6e6e6;
@@ -97,7 +117,7 @@
 {% block content %}
 
   <h2>主机日志分析</h2>
-  <p>扫描本机 Windows Event Log，归一化后写入 SQL Server（dbo.HostLogs）。支持按 <b>host_name(ComputerName)</b> 精确筛选。</p>
+  <p>扫描服务器 Windows Event Log，归一化后写入 SQL Server（dbo.HostLogs）。支持按 <b>host_name(ComputerName)</b> 精确筛选。</p>
 
   {% set page_size = 20 %}
   {% set total_pages = ((total + page_size - 1) // page_size) if total is not none else 1 %}
@@ -108,7 +128,7 @@
       <form method="post" action="{{ url_for('logs.collect', host_name=host_name) }}">
         <button class="btn" type="submit" title="扫描本机 Security/System 并写入数据库">
           <span aria-hidden="true">🖥️</span>
-          <span>扫描本机日志并入库</span>
+          <span>扫描服务器日志并入库</span>
         </button>
       </form>
 
@@ -125,9 +145,24 @@
           <a class="btn-ghost" href="{{ url_for('logs.list_logs') }}">清除</a>
         </div>
       </form>
+
+      <form class="db-form" method="post" action="{{ url_for('logs.set_db_server') }}">
+        <input type="hidden" name="host_name" value="{{ host_name or '' }}">
+        <label class="db-label" for="db_server">SQL Server</label>
+        <input
+          id="db_server"
+          name="db_server"
+          class="db-input"
+          type="text"
+          placeholder="localhost,1433"
+          value="{{ db_server }}"
+        >
+        <button class="btn secondary" type="submit">应用</button>
+      </form>
     </div>
 
     <div class="toolbar-right" style="color:#555;font-size:13px;">
+      <span>DB：<b>{{ db_server }}</b></span>
       <span>📦 总数：<b>{{ total }}</b></span>
       <span>📄 第 <b>{{ page }}</b> / <b>{{ total_pages }}</b> 页</span>
     </div>

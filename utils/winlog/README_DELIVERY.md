@@ -70,3 +70,9 @@ python -c "from utils.winlog import extract_host_logs_from_winlogbeat_ndjson as 
 ## 4. 数据较为重复无价值 如何提取重要的有威胁消息？
 
 ## 5. 数据存储并未加密
+
+### 1/13
+
+## 采集日志记录存在准确率不高的问题：体现在可能重复、恶意攻击价值不高等问题
+
+## 数据库可能存在重复数据

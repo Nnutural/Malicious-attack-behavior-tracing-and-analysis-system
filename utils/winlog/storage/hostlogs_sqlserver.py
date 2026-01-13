@@ -38,7 +38,14 @@ class HostLogRow:
     host_name: str | None = None
 
 
-def insert_hostlog(*, result_json: str, content: str | None, event_hash: str, host_name: str | None) -> int:
+def insert_hostlog(
+    *,
+    result_json: str,
+    content: str | None,
+    event_hash: str,
+    host_name: str | None,
+    conn_str: str | None = None,
+) -> int:
     """
     插入一条 HostLogs 记录。
     - create_time 使用数据库默认 sysdatetime()。
@@ -47,10 +54,16 @@ def insert_hostlog(*, result_json: str, content: str | None, event_hash: str, ho
     INSERT INTO dbo.HostLogs (result, content, event_hash, host_name)
     VALUES (?, ?, ?, ?)
     """
-    return execute(sql, [result_json, content, event_hash, host_name])
+    return execute(sql, [result_json, content, event_hash, host_name], conn_str)
 
 
-def list_hostlogs(*, offset: int, limit: int, host_name: str | None = None) -> list[HostLogRow]:
+def list_hostlogs(
+    *,
+    offset: int,
+    limit: int,
+    host_name: str | None = None,
+    conn_str: str | None = None,
+) -> list[HostLogRow]:
     """
     分页查询（最新在前）。
     支持按 host_name 精确筛选：WHERE host_name = ?
@@ -73,7 +86,7 @@ def list_hostlogs(*, offset: int, limit: int, host_name: str | None = None) -> l
         """
         params = [offset, limit]
 
-    rows = fetch_all(sql, params)
+    rows = fetch_all(sql, params, conn_str)
     return [
         HostLogRow(
             id=int(r["id"]),
@@ -87,13 +100,13 @@ def list_hostlogs(*, offset: int, limit: int, host_name: str | None = None) -> l
     ]
 
 
-def get_hostlog_by_id(log_id: int) -> HostLogRow | None:
+def get_hostlog_by_id(log_id: int, conn_str: str | None = None) -> HostLogRow | None:
     sql = """
     SELECT id, result, content, create_time, event_hash, host_name
     FROM dbo.HostLogs
     WHERE id = ?
     """
-    r = fetch_one(sql, [log_id])
+    r = fetch_one(sql, [log_id], conn_str)
     if not r:
         return None
     return HostLogRow(
@@ -106,15 +119,15 @@ def get_hostlog_by_id(log_id: int) -> HostLogRow | None:
     )
 
 
-def count_hostlogs(host_name: str | None = None) -> int:
+def count_hostlogs(host_name: str | None = None, conn_str: str | None = None) -> int:
     if host_name:
-        r = fetch_one("SELECT COUNT(1) AS total FROM dbo.HostLogs WHERE host_name = ?", [host_name])
+        r = fetch_one("SELECT COUNT(1) AS total FROM dbo.HostLogs WHERE host_name = ?", [host_name], conn_str)
     else:
-        r = fetch_one("SELECT COUNT(1) AS total FROM dbo.HostLogs")
+        r = fetch_one("SELECT COUNT(1) AS total FROM dbo.HostLogs", conn_str=conn_str)
     return int(r["total"]) if r and r.get("total") is not None else 0
 
 
-def list_distinct_host_names(limit: int = 200) -> list[str]:
+def list_distinct_host_names(limit: int = 200, conn_str: str | None = None) -> list[str]:
     """
     返回出现过的 host_name 列表（用于前端下拉）。
     limit 防止数据量很大时下拉过长。
@@ -126,7 +139,7 @@ def list_distinct_host_names(limit: int = 200) -> list[str]:
     GROUP BY host_name
     ORDER BY host_name ASC
     """
-    rows = fetch_all(sql, [limit])
+    rows = fetch_all(sql, [limit], conn_str)
     return [str(r["host_name"]) for r in rows if r.get("host_name")]
 
 
