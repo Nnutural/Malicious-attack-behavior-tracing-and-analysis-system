@@ -2,58 +2,312 @@
 
 {% block title %}行为分析 - 攻击溯源分析系统{% endblock %}
 
+{% block extra_css %}
+<style>
+  .bm-toolbar {
+    display:flex; flex-wrap:wrap; gap:10px; align-items:center;
+    padding:10px 12px; border:1px solid #e5e7eb; background:#fafafa; border-radius:10px;
+    margin:12px 0;
+  }
+  .bm-btn {
+    padding:8px 12px; border-radius:10px; border:1px solid #d1d5db;
+    background:#fff; cursor:pointer; font-size:14px;
+  }
+  .bm-btn.primary { background:#111827; color:#fff; border-color:#111827; }
+  .bm-btn.danger { background:#b91c1c; color:#fff; border-color:#b91c1c; }
+  .bm-btn:disabled { opacity:.6; cursor:not-allowed; }
+
+  .bm-pill { display:inline-block; padding:4px 10px; border-radius:999px; font-size:13px; border:1px solid #d1d5db; background:#fff; }
+  .bm-pill.running { border-color:#10b981; color:#065f46; background:#ecfdf5; }
+  .bm-pill.stopped { border-color:#ef4444; color:#7f1d1d; background:#fef2f2; }
+
+  .bm-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:10px 0 14px 0; }
+  .bm-card { border:1px solid #e5e7eb; border-radius:10px; background:#fff; padding:10px; height:280px; overflow:hidden; }
+  .bm-card h3 { margin:0 0 8px 0; font-size:15px; }
+  .bm-card pre { margin:0; background:#0b1220; color:#d1d5db; border-radius:8px; padding:10px; height:230px; overflow:auto; font-size:12px; line-height:1.45; }
+
+  .bm-table-wrap { border:1px solid #e5e7eb; border-radius:10px; overflow:hidden; background:#fff; }
+  table.bm-table { width:100%; border-collapse:collapse; table-layout:fixed; }
+  table.bm-table thead th { background:#f3f4f6; padding:10px 8px; font-weight:600; font-size:13px; border-bottom:1px solid #e5e7eb; text-align:left; }
+  table.bm-table tbody td { padding:9px 8px; border-bottom:1px solid #f1f5f9; vertical-align:top; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  table.bm-table tbody tr:hover td { background:#fafafa; }
+  .bm-muted { color:#6b7280; font-size:13px; }
+
+  .bm-pagination { display:flex; justify-content:space-between; align-items:center; padding:10px 12px; border-top:1px solid #e5e7eb; background:#fafafa; }
+  .bm-pagination .bm-btn { padding:6px 10px; border-radius:8px; }
+
+  .col-id{width:70px;}
+  .col-time{width:180px;}
+  .col-host{width:160px;}
+  .col-type{width:140px;}
+  .col-action{width:110px;}
+  .col-proc{width:160px;}
+  .col-pid{width:110px;}
+  .col-target{width:220px;}
+  .col-cmd{width:auto;}
+</style>
+{% endblock %}
+
 {% block content %}
-<section class="page-head">
-  <h2>主机行为分析</h2>
-  <p class="muted">后续接入进程树、文件操作、可疑行为链分析。</p>
-</section>
+<h2>主机行为分析（客户端 Agent 上报展示）</h2>
+<p class="bm-muted">
+  本页面<b>不负责采集</b>，只展示客户端 Agent 上报入库的数据。<br>
+  在客户端运行：<code>python utils/behavior_monitor/client_agent.py --server http://&lt;server_ip&gt;:5000</code>
+</p>
 
-<section class="grid">
-  <div class="card">
-    <h3>进程树（占位）</h3>
-    <p class="muted">后续在这里渲染进程父子关系图。</p>
-    <div class="placeholder">Process Tree Placeholder</div>
-  </div>
-  <div class="card">
-    <h3>文件操作时间线（占位）</h3>
-    <p class="muted">后续在这里渲染文件创建/修改/删除时间线。</p>
-    <div class="placeholder">File Timeline Placeholder</div>
-  </div>
-</section>
+<div class="bm-toolbar">
+  <button id="btnShow" class="bm-btn primary" type="button">▶ 开始显示（自动刷新）</button>
+  <button id="btnHide" class="bm-btn danger" type="button" disabled>■ 停止显示</button>
 
-<section class="card">
-  <h3>进程列表（示例）</h3>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>PID</th>
-          <th>进程名</th>
-          <th>父进程PID</th>
-          <th>命令行</th>
-          <th>创建时间</th>
-          <th>状态</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>1234</td>
-          <td>explorer.exe</td>
-          <td>1000</td>
-          <td>C:\Windows\explorer.exe</td>
-          <td>2026-01-12 08:00:00</td>
-          <td><span class="badge ok">运行中</span></td>
-        </tr>
-        <tr>
-          <td>5678</td>
-          <td>cmd.exe</td>
-          <td>1234</td>
-          <td>cmd.exe /c "whoami"</td>
-          <td>2026-01-12 10:30:15</td>
-          <td><span class="badge danger">可疑</span></td>
-        </tr>
-      </tbody>
-    </table>
+  <span style="margin-left:10px;">
+    主机筛选：
+    <select id="hostSelect" class="bm-btn" style="padding:7px 10px;">
+      <option value="">全部主机</option>
+      {% for hn in host_names %}
+        <option value="{{ hn }}">{{ hn }}</option>
+      {% endfor %}
+    </select>
+  </span>
+
+  <span>
+    树/时间线基于最近：
+    <select id="panelLimit" class="bm-btn" style="padding:7px 10px;">
+      <option value="50">50 条</option>
+      <option value="100">100 条</option>
+      <option value="200">200 条</option>
+      <option value="500" selected>500 条</option>
+      <option value="1000">1000 条</option>
+      <option value="1500">1500 条</option>
+      <option value="2000">2000 条</option>
+    </select>
+  </span>
+
+  <span style="margin-left:auto;"></span>
+
+  <span>显示状态：<span id="statusPill" class="bm-pill stopped">stopped</span></span>
+
+  <span class="bm-muted">
+    已显示：<b id="uptimeText">0</b>s
+    &nbsp;|&nbsp;
+    自动刷新：<b id="autoRefreshText">off</b>
+  </span>
+</div>
+
+<div class="bm-grid">
+  <div class="bm-card">
+    <h3>进程树</h3>
+    <pre id="processTreeBox">{}</pre>
   </div>
-</section>
+  <div class="bm-card">
+    <h3>文件操作时间线</h3>
+    <pre id="fileTimelineBox">{}</pre>
+  </div>
+</div>
+
+<h3 style="margin: 8px 0;">最近行为事件</h3>
+
+<div class="bm-table-wrap">
+  <table class="bm-table">
+    <thead>
+      <tr>
+        <th class="col-id">ID</th>
+        <th class="col-time">时间</th>
+        <th class="col-host">host</th>
+        <th class="col-type">event_type</th>
+        <th class="col-action">action</th>
+        <th class="col-proc">process</th>
+        <th class="col-pid">pid/ppid</th>
+        <th class="col-target">target</th>
+        <th class="col-cmd">command_line</th>
+      </tr>
+    </thead>
+    <tbody id="eventsTbody">
+      <tr><td colspan="9" class="bm-muted" style="padding:12px;">暂无数据。请先启动客户端 Agent 上报。</td></tr>
+    </tbody>
+  </table>
+
+  <div class="bm-pagination">
+    <div>
+      总数：<b id="totalCount">0</b>
+      &nbsp;|&nbsp;
+      第 <b id="pageText">1</b> 页
+    </div>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <button id="btnPrev" class="bm-btn" type="button">⬅ 上一页</button>
+      <button id="btnNext" class="bm-btn" type="button">下一页 ➡</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  const PAGE_SIZE = 20;
+  let currentPage = 1;
+
+  // 只控制展示轮询，不控制采集
+  let pollTimer = null;  // 5s 拉数据
+  let tickTimer = null;  // 1s 走秒
+  let showStartedAtMs = null;
+
+  function getHostNameFilter() {
+    const sel = document.getElementById('hostSelect');
+    return sel ? (sel.value || '') : '';
+  }
+
+  function getPanelLimit() {
+    const sel = document.getElementById('panelLimit');
+    const v = sel ? parseInt(sel.value || '500', 10) : 500;
+    return Math.max(1, Math.min(v || 500, 2000));
+  }
+
+  async function apiGet(url) {
+    const resp = await fetch(url, {method:'GET'});
+    return await resp.json();
+  }
+
+  function setDisplayUI(running) {
+    const btnShow = document.getElementById('btnShow');
+    const btnHide = document.getElementById('btnHide');
+    const pill = document.getElementById('statusPill');
+    const autoText = document.getElementById('autoRefreshText');
+
+    if (running) {
+      pill.className = 'bm-pill running';
+      pill.innerText = 'running';
+      btnShow.disabled = true;
+      btnShow.innerText = '显示中…';
+      btnHide.disabled = false;
+      autoText.innerText = 'on（5s）';
+    } else {
+      pill.className = 'bm-pill stopped';
+      pill.innerText = 'stopped';
+      btnShow.disabled = false;
+      btnShow.innerText = '▶ 开始显示（自动刷新）';
+      btnHide.disabled = true;
+      autoText.innerText = 'off';
+    }
+  }
+
+  function renderEvents(items) {
+    const tbody = document.getElementById('eventsTbody');
+    tbody.innerHTML = '';
+    if (!items || items.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="9" class="bm-muted" style="padding:12px;">暂无数据。请先启动客户端 Agent 上报。</td></tr>`;
+      return;
+    }
+    for (const it of items) {
+      const target = it.target_file || it.target_ip || '';
+      const cmd = (it.cmd || '').replaceAll('<','&lt;').replaceAll('>','&gt;');
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="col-id">${it.id}</td>
+        <td class="col-time" title="${it.timestamp || ''}">${it.timestamp || ''}</td>
+        <td class="col-host" title="${it.host || ''}">${it.host || ''}</td>
+        <td class="col-type">${it.event_type || ''}</td>
+        <td class="col-action">${it.action || ''}</td>
+        <td class="col-proc" title="${it.process || ''}">${it.process || ''}</td>
+        <td class="col-pid">${(it.pid ?? '')}/${(it.ppid ?? '')}</td>
+        <td class="col-target" title="${target}">${target}</td>
+        <td class="col-cmd" title="${cmd}">${cmd}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+  }
+
+  function updatePagination(total) {
+    document.getElementById('totalCount').innerText = total ?? 0;
+    document.getElementById('pageText').innerText = currentPage;
+    const totalPages = Math.max(1, Math.ceil((total ?? 0) / PAGE_SIZE));
+    document.getElementById('btnPrev').disabled = currentPage <= 1;
+    document.getElementById('btnNext').disabled = currentPage >= totalPages;
+  }
+
+  async function refreshPanelsAndTable() {
+    const host = getHostNameFilter();
+    const hostQs = host ? `host_name=${encodeURIComponent(host)}&` : '';
+    const limit = getPanelLimit();
+
+    const tree = await apiGet(`/behavior/process_tree?${hostQs}limit=${limit}`);
+    document.getElementById('processTreeBox').innerText = JSON.stringify(tree, null, 2);
+
+    const tl = await apiGet(`/behavior/file_timeline?${hostQs}limit=${limit}`);
+    document.getElementById('fileTimelineBox').innerText = JSON.stringify(tl, null, 2);
+
+    const qs = new URLSearchParams();
+    qs.set('page', String(currentPage));
+    qs.set('page_size', String(PAGE_SIZE));
+    if (host) qs.set('host_name', host);
+
+    const rec = await apiGet(`/behavior/recent?${qs.toString()}`);
+    renderEvents(rec.items || []);
+    updatePagination(rec.total || 0);
+  }
+
+  function startTick() {
+    if (tickTimer) return;
+    tickTimer = setInterval(() => {
+      if (!showStartedAtMs) return;
+      const sec = Math.max(0, Math.floor((Date.now() - showStartedAtMs) / 1000));
+      document.getElementById('uptimeText').innerText = String(sec);
+    }, 1000);
+  }
+
+  function stopTick() {
+    if (!tickTimer) return;
+    clearInterval(tickTimer);
+    tickTimer = null;
+  }
+
+  function startPolling() {
+    if (pollTimer) return;
+    pollTimer = setInterval(refreshPanelsAndTable, 5000);
+    document.getElementById('autoRefreshText').innerText = 'on（5s）';
+  }
+
+  function stopPolling() {
+    if (!pollTimer) return;
+    clearInterval(pollTimer);
+    pollTimer = null;
+    document.getElementById('autoRefreshText').innerText = 'off';
+  }
+
+  document.getElementById('btnShow').addEventListener('click', async () => {
+    setDisplayUI(true);
+    showStartedAtMs = Date.now();
+    startTick();
+    await refreshPanelsAndTable();
+    startPolling();
+  });
+
+  document.getElementById('btnHide').addEventListener('click', async () => {
+    setDisplayUI(false);
+    stopPolling();
+    stopTick();
+    showStartedAtMs = null;
+    document.getElementById('uptimeText').innerText = '0';
+  });
+
+  document.getElementById('hostSelect').addEventListener('change', async () => {
+    currentPage = 1;
+    await refreshPanelsAndTable();
+  });
+
+  document.getElementById('panelLimit').addEventListener('change', async () => {
+    await refreshPanelsAndTable();
+  });
+
+  document.getElementById('btnPrev').addEventListener('click', async () => {
+    if (currentPage > 1) currentPage -= 1;
+    await refreshPanelsAndTable();
+  });
+
+  document.getElementById('btnNext').addEventListener('click', async () => {
+    currentPage += 1;
+    await refreshPanelsAndTable();
+  });
+
+  // 初次加载：先加载一次（不自动刷新）
+  refreshPanelsAndTable();
+</script>
 {% endblock %}
