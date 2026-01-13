@@ -1,14 +1,18 @@
-"""主机行为分析视图（HostBehaviors 入库 + 监听控制 + 可视化数据接口）"""
+"""主机行为分析视图（客户端 Agent 上报 + 展示为主）
+
+说明：
+- 客户端运行 utils/behavior_monitor/client_agent.py 上报到 /behavior/ingest
+- 行为分析页面只负责展示/筛选/分页/树与时间线数据
+- 为避免误操作，此文件将 /behavior/start /behavior/stop 禁用（不再启动服务器本机监听）
+"""
 
 from __future__ import annotations
 
-import json
 import logging
-from collections import defaultdict
 
 from flask import Blueprint, current_app, jsonify, render_template, request
 
-from utils.behavior_monitor.service.behavior_manager import BehaviorMonitorManager
+from utils.behavior_monitor.service.hostbehaviors_ingest import ingest_host_behavior_event
 from utils.behavior_monitor.storage.hostbehaviors_sqlserver import (
     count_hostbehaviors,
     list_distinct_host_names,
@@ -18,9 +22,6 @@ from utils.behavior_monitor.storage.hostbehaviors_sqlserver import (
 
 bp = Blueprint("behavior", __name__)
 logger = logging.getLogger(__name__)
-
-# 简单单例（开发模式 reloader 可能会创建两份进程，这点你后面可优化）
-_MANAGER = BehaviorMonitorManager()
 
 
 def _get_logger() -> logging.Logger:
@@ -42,46 +43,82 @@ def index():
 
 @bp.route("/start", methods=["POST"])
 def start():
-    return jsonify(_MANAGER.start())
+    # 禁用服务器本机监听，防止误操作混入服务器数据
+    return jsonify({"ok": False, "message": "已切换为客户端 Agent 上报模式：页面不再启动服务器本机监听。"}), 400
 
 
 @bp.route("/stop", methods=["POST"])
 def stop():
-    return jsonify(_MANAGER.stop())
+    return jsonify({"ok": False, "message": "已切换为客户端 Agent 上报模式：页面不再启动服务器本机监听。"}), 400
 
 
 @bp.route("/status", methods=["GET"])
 def status():
-    return jsonify(_MANAGER.status())
+    # 展示模式无需服务器监听状态
+    return jsonify(
+        {
+            "running": False,
+            "started_at": None,
+            "uptime_sec": 0,
+            "counters": {"inserted": 0, "skipped": 0, "errors": 0},
+        }
+    )
+
+
+@bp.route("/ingest", methods=["POST"])
+def ingest():
+    """
+    客户端 Agent 上报入口。
+    1) 单条：
+       { "event": {...}, "host_name": "client-01", "raw": "..." }
+    2) 多条：
+       { "events": [{...}, {...}], "host_name": "client-01" }
+    返回：inserted/skipped/errors
+    """
+    data = request.get_json(silent=True) or {}
+    host_name = (data.get("host_name") or "").strip() or None
+
+    inserted = 0
+    skipped = 0
+    errors = 0
+
+    if isinstance(data.get("event"), dict):
+        ev = data["event"]
+        raw = data.get("raw")
+        r = ingest_host_behavior_event(event=ev, raw_content=raw, host_name=host_name)
+        inserted += int(r.get("inserted") or 0)
+        skipped += int(r.get("skipped") or 0)
+        errors += int(r.get("errors") or 0)
+
+    elif isinstance(data.get("events"), list):
+        for ev in data["events"]:
+            if not isinstance(ev, dict):
+                continue
+            r = ingest_host_behavior_event(event=ev, raw_content=None, host_name=host_name)
+            inserted += int(r.get("inserted") or 0)
+            skipped += int(r.get("skipped") or 0)
+            errors += int(r.get("errors") or 0)
+    else:
+        return jsonify({"ok": False, "error": "invalid payload"}), 400
+
+    return jsonify({"ok": True, "inserted": inserted, "skipped": skipped, "errors": errors})
 
 
 @bp.route("/recent", methods=["GET"])
 def recent():
-    limit = request.args.get("limit", 50, type=int)
-    limit = max(1, min(limit, 500))
+    """
+    分页返回最近行为事件：
+    ?page=1&page_size=20&host_name=xxx
+    """
     host_name = (request.args.get("host_name") or "").strip() or None
 
-    rows = list_hostbehaviors(offset=0, limit=limit, host_name=host_name)
-    items = []
-    for r in rows:
-        ev = parse_result_json(r.result)
-        items.append(
-            {
-                "id": r.id,
-                "timestamp": str(ev.get("timestamp") or ""),
-                "host": str(r.host_name or ev.get("host_ip") or ""),
-                "event_type": str(ev.get("event_type") or ""),
-                "action": str(ev.get("action") or ""),
-                "process": str((ev.get("entities") or {}).get("process_name") or ""),
-                "pid": (ev.get("entities") or {}).get("pid"),
-                "ppid": (ev.get("entities") or {}).get("parent_pid"),
-                "cmd": str((ev.get("entities") or {}).get("command_line") or ""),
-                "target_file": (ev.get("entities") or {}).get("target_file"),
-                "target_ip": (ev.get("entities") or {}).get("target_ip"),
-                "raw": r.content,
-                "event": ev,
-            }
-        )
+    page = request.args.get("page", 1, type=int)
+    page = max(page, 1)
+    page_size = request.args.get("page_size", 20, type=int)
+    page_size = max(5, min(page_size, 100))
+
+    offset = (page - 1) * page_size
+    rows = list_hostbehaviors(offset=offset, limit=page_size, host_name=host_name)
 
     total = 0
     try:
@@ -89,15 +126,33 @@ def recent():
     except Exception:
         pass
 
-    return jsonify({"ok": True, "total": total, "items": items})
+    return jsonify(
+        {"ok": True, "total": total, "page": page, "page_size": page_size, "items": [_row_to_item(r) for r in rows]}
+    )
+
+
+def _row_to_item(r) -> dict:
+    ev = parse_result_json(r.result)
+    ent = ev.get("entities") or {}
+    return {
+        "id": r.id,
+        "timestamp": str(ev.get("timestamp") or ""),
+        "host": str(r.host_name or ev.get("host_ip") or ""),
+        "event_type": str(ev.get("event_type") or ""),
+        "action": str(ev.get("action") or ""),
+        "process": str(ent.get("process_name") or ""),
+        "pid": ent.get("pid"),
+        "ppid": ent.get("parent_pid"),
+        "cmd": str(ent.get("command_line") or ""),
+        "target_file": ent.get("target_file"),
+        "target_ip": ent.get("target_ip"),
+        "raw": r.content,
+        "event": ev,
+    }
 
 
 @bp.route("/process_tree", methods=["GET"])
 def process_tree():
-    """
-    简易进程树：基于 recent events 的 pid/parent_pid 聚合。
-    返回 nodes + edges，前端可用 ECharts graph/tree 画。
-    """
     limit = request.args.get("limit", 500, type=int)
     limit = max(1, min(limit, 2000))
     host_name = (request.args.get("host_name") or "").strip() or None
@@ -122,7 +177,6 @@ def process_tree():
             nodes[pid] = {"id": pid, "label": f"{pname} ({pid})", "cmd": cmd}
         if isinstance(ppid, int) and ppid > 0:
             edges.append({"source": ppid, "target": pid})
-
             if ppid not in nodes:
                 nodes[ppid] = {"id": ppid, "label": f"PID {ppid}", "cmd": ""}
 
@@ -131,10 +185,6 @@ def process_tree():
 
 @bp.route("/file_timeline", methods=["GET"])
 def file_timeline():
-    """
-    文件时间线：聚合 file_create/file_modify/file_delete/file_read
-    输出按 timestamp 排序的事件列表。
-    """
     limit = request.args.get("limit", 500, type=int)
     limit = max(1, min(limit, 2000))
     host_name = (request.args.get("host_name") or "").strip() or None
