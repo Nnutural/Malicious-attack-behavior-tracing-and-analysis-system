@@ -1,45 +1,86 @@
-import pymysql
-from dbutils.pooled_db import PooledDB
-from pymysql import cursors
-POOL=PooledDB(
-    creator=pymysql, # 使用链接数据库的模块
-    maxconnections=10,# 连接池允许的最大连接数，0和None表示不限制连接数
-    mincached=2,# 初始化时，链接池中至少创建的空闲的链接，0表示不创建
-    maxcached=3,# 链接池中最多闲置的链接，0和None不限制
-    blocking=True,# 连接池中如果没有可用链接后，是否阻塞等待，True等待，False不等待然后报错
-    setsession=[],# 开始会话前执行的命令列表,是否阻塞等待，True等待,False不等待然后报错
-    ping=0,# ping Mysql服务器，检查是否服务可用
+"""
+SQL Server 简单版 db.py（不使用连接池）
 
-    host='localhost',port=3306,user='root',password='Wmy142739',database='misai',charset='utf8'
-)
+特点：
+- 每次操作：新建连接 -> 执行 -> 提交/关闭
+- 代码简单，适合你当前阶段快速跑通
+- 缺点：频繁调用时性能不如连接池，但对小项目/开发阶段足够
 
-def fetch_one(sql,params):
-    conn=POOL.connection()
-    cursor=conn.cursor(cursor=cursors.DictCursor) # "cursors.DictCursor"使这个游标可以返回字典格式的数据
-    cursor.execute(sql,params)
-    result=cursor.fetchone() # fetchone()只返回一条数据,返回匹配成功时的第一条数据
-    print("数据库匹配到的用户数据：",result)
+依赖：
+pip install pyodbc
+"""
+
+import pyodbc
+from config import Config
+
+
+def get_conn():
+    """获取一个新的数据库连接"""
+    return pyodbc.connect(Config.SQL_CONN_STR)
+
+
+def fetch_one(sql, params=None):
+    """查询一条，返回 dict；没有数据返回 None"""
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute(sql, params or [])
+    row = cursor.fetchone()
+    if row is None:
+        cursor.close()
+        conn.close()
+        return None
+    columns = [col[0] for col in cursor.description]
+    result = dict(zip(columns, row))
     cursor.close()
-    conn.close() # 引入连接池后，这一步就不是关闭连接，而是释放资源,把链接放回连接池了
+    conn.close()
     return result
 
-def fetch_all(sql,params):
-    conn=POOL.connection()
-    cursor=conn.cursor(cursor=cursors.DictCursor) # "cursors.DictCursor"使这个游标可以返回字典格式的数据
-    cursor.execute(sql,params)
-    result=cursor.fetchall() # fetchall()返回匹配成功的所有数据
-    # print(result)
+
+def fetch_all(sql, params=None):
+    """查询多条，返回 dict 列表"""
+    conn = get_conn()
+    cursor = conn.cursor()
+
+    cursor.execute(sql, params or [])
+    rows = cursor.fetchall()
+
+    columns = [col[0] for col in cursor.description]
+    result = [dict(zip(columns, r)) for r in rows]
+
     cursor.close()
-    conn.close() # 引入连接池后，这一步就不是关闭连接，而是释放资源,把链接放回连接池了
+    conn.close()
     return result
 
-def insert(sql,params):
-    conn=POOL.connection()
-    cursor=conn.cursor(cursor=cursors.DictCursor) # "cursors.DictCursor"使这个游标可以返回字典格式的数据
-    cursor.execute(sql,params)
-    conn.commit() # 提交事务,在执行创建，删除的数据库操作时要提交事务
+
+def execute(sql, params=None):
+    """
+    执行写操作（INSERT/UPDATE/DELETE）
+    返回：受影响行数
+    """
+    conn = get_conn()
+    cursor = conn.cursor()
+
+    cursor.execute(sql, params or [])
+    conn.commit()
+
+    rowcount = cursor.rowcount
     cursor.close()
-    conn.close() # 引入连接池后，这一步就不是关闭连接，而是释放资源,把链接放回连接池了
-    return cursor.lastrowid # 返回插入数据的主键id,也是最后一条数据的id
+    conn.close()
+    return rowcount
 
 
+if __name__ == "__main__":
+    # 1) 测试连接：看一下当前数据库名
+    print(fetch_one("SELECT DB_NAME() AS db_name"))
+
+    # 2) 测试查询：查最新一条网络流量
+    print(fetch_one("SELECT TOP 1 * FROM dbo.NetworkTraffic ORDER BY create_time DESC"))
+
+    # 3) 测试写入：插入一条网络流量
+    print(
+        "插入影响行数：",
+        execute(
+            "INSERT INTO dbo.NetworkTraffic (result, content) VALUES (?, ?)",
+            ["{test:1}", "hello traffic (no pool)"]
+        )
+    )

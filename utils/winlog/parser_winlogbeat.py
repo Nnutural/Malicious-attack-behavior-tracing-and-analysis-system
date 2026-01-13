@@ -525,6 +525,7 @@ def extract_host_logs_from_windows_eventlog(
     enable_time_alignment: bool = True,
     strict: bool = True,
     state_store: StateStore | None = None,
+    prefer_latest: bool = True,
     use_pywin32: bool = True,
     use_wevtutil_fallback: bool = True,
 ) -> list[dict]:
@@ -542,6 +543,7 @@ def extract_host_logs_from_windows_eventlog(
         enable_time_alignment: 是否应用时间对齐与诊断逻辑。
         strict: 为 True 时，字段缺失/格式错误抛出 ValueError。
         state_store: 断点续读状态存储。
+        prefer_latest: 是否优先读取最新事件。
         use_pywin32: 是否优先使用 pywin32。
         use_wevtutil_fallback: 是否使用 wevtutil 作为备用路径。
 
@@ -558,6 +560,7 @@ def extract_host_logs_from_windows_eventlog(
         include_xml=include_xml,
         batch_size=batch_size,
         state_store=state_store or StateStore(),
+        prefer_latest=prefer_latest,
         use_pywin32=use_pywin32,
         use_wevtutil_fallback=use_wevtutil_fallback,
     )

@@ -63,6 +63,7 @@ python -c "from utils.winlog import extract_host_logs_from_winlogbeat_ndjson as 
 如果需要不同主机上运行该部分，则应每个部分起码实现了该日志采集模块，另外也应是指不同的存储方式以区分
 
 ## 2. 限制了200条日志采集
+而且日志日期存在问题
 
 ## 3. 读取数据库显示序号为从大到小
 
