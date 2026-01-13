@@ -32,7 +32,9 @@ class HostLogRow:
     event_hash: str | None = None
 
 
-def insert_hostlog(*, result_json: str, content: str | None, event_hash: str) -> int:
+def insert_hostlog(
+    *, result_json: str, content: str | None, event_hash: str, conn_str: str | None = None
+) -> int:
     """
     插入一条 HostLogs 记录。
     - 若 event_hash 唯一索引存在：重复会抛异常（23000/2601/2627），上层可忽略。
@@ -42,10 +44,10 @@ def insert_hostlog(*, result_json: str, content: str | None, event_hash: str) ->
     INSERT INTO dbo.HostLogs (result, content, event_hash)
     VALUES (?, ?, ?)
     """
-    return execute(sql, [result_json, content, event_hash])
+    return execute(sql, [result_json, content, event_hash], conn_str)
 
 
-def list_hostlogs(*, offset: int, limit: int) -> list[HostLogRow]:
+def list_hostlogs(*, offset: int, limit: int, conn_str: str | None = None) -> list[HostLogRow]:
     """
     分页查询（最新在前）。
     SQL Server: ORDER BY ... OFFSET ... FETCH ...
@@ -56,7 +58,7 @@ def list_hostlogs(*, offset: int, limit: int) -> list[HostLogRow]:
     ORDER BY id DESC
     OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
     """
-    rows = fetch_all(sql, [offset, limit])
+    rows = fetch_all(sql, [offset, limit], conn_str)
     return [
         HostLogRow(
             id=int(r["id"]),
@@ -69,13 +71,13 @@ def list_hostlogs(*, offset: int, limit: int) -> list[HostLogRow]:
     ]
 
 
-def get_hostlog_by_id(log_id: int) -> HostLogRow | None:
+def get_hostlog_by_id(log_id: int, conn_str: str | None = None) -> HostLogRow | None:
     sql = """
     SELECT id, result, content, create_time, event_hash
     FROM dbo.HostLogs
     WHERE id = ?
     """
-    r = fetch_one(sql, [log_id])
+    r = fetch_one(sql, [log_id], conn_str)
     if not r:
         return None
     return HostLogRow(
@@ -87,8 +89,8 @@ def get_hostlog_by_id(log_id: int) -> HostLogRow | None:
     )
 
 
-def count_hostlogs() -> int:
-    r = fetch_one("SELECT COUNT(1) AS total FROM dbo.HostLogs")
+def count_hostlogs(conn_str: str | None = None) -> int:
+    r = fetch_one("SELECT COUNT(1) AS total FROM dbo.HostLogs", conn_str=conn_str)
     return int(r["total"]) if r and r.get("total") is not None else 0
 
 

@@ -23,6 +23,18 @@ class Config:
         "TrustServerCertificate=yes;"
     )
 
+    @classmethod
+    def build_sql_conn_str(cls, server: str | None = None) -> str:
+        db_server = server or cls.DB_SERVER
+        return (
+            f"DRIVER={{{cls.DB_DRIVER}}};"
+            f"SERVER={db_server};"
+            f"DATABASE={cls.DB_DATABASE};"
+            f"UID={cls.DB_USERNAME};"
+            f"PWD={cls.DB_PASSWORD};"
+            "TrustServerCertificate=yes;"
+        )
+
     # 下面 SQLAlchemy 的配置你当前用不到，可以先留空或保留原样（避免别处引用报错）
     SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') or ''
     SQLALCHEMY_TRACK_MODIFICATIONS = False

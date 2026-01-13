@@ -32,9 +32,12 @@ def ingest_windows_eventlog_to_sqlserver(
     *,
     max_events: int = 200,
     strict: bool = False,
+    conn_str: str | None = None,
 ) -> dict[str, Any]:
     """
     采集 Windows Event Log 并写入 dbo.HostLogs。
+
+    conn_str 可用于覆盖默认 SQL Server 连接串。
 
     返回：
     {
@@ -68,7 +71,12 @@ def ingest_windows_eventlog_to_sqlserver(
         event_hash = _sha256_hex(result_json)
 
         try:
-            insert_hostlog(result_json=result_json, content=content, event_hash=event_hash)
+            insert_hostlog(
+                result_json=result_json,
+                content=content,
+                event_hash=event_hash,
+                conn_str=conn_str,
+            )
             inserted += 1
         except Exception as exc:
             # 如果你建了 UNIQUE INDEX，重复插入通常会触发 2601/2627 等异常
