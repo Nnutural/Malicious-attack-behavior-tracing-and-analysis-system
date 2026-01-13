@@ -211,3 +211,15 @@ def file_timeline():
 
     events.sort(key=lambda x: x.get("timestamp") or "")
     return jsonify({"ok": True, "events": events})
+
+# 只展示关键新增路由，其余保持你当前文件不变
+# 在文件中加入这个路由即可
+
+@bp.route("/host_names", methods=["GET"])
+def host_names():
+    try:
+        names = list_distinct_host_names(limit=500)
+        return jsonify({"ok": True, "host_names": names})
+    except Exception as exc:
+        _get_logger().warning("读取 HostBehaviors host_names 失败: %s", exc)
+        return jsonify({"ok": False, "host_names": []})
