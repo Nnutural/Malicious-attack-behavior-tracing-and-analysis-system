@@ -3,57 +3,158 @@
 {% block title %}行为分析 - 攻击溯源分析系统{% endblock %}
 
 {% block content %}
-<section class="page-head">
-  <h2>主机行为分析</h2>
-  <p class="muted">后续接入进程树、文件操作、可疑行为链分析。</p>
-</section>
 
-<section class="grid">
-  <div class="card">
-    <h3>进程树（占位）</h3>
-    <p class="muted">后续在这里渲染进程父子关系图。</p>
-    <div class="placeholder">Process Tree Placeholder</div>
-  </div>
-  <div class="card">
-    <h3>文件操作时间线（占位）</h3>
-    <p class="muted">后续在这里渲染文件创建/修改/删除时间线。</p>
-    <div class="placeholder">File Timeline Placeholder</div>
-  </div>
-</section>
+<h2>主机行为分析</h2>
+<p>点击“开始监听”后，服务器将在本机启动行为采集（Windows: Sysmon；Linux: Falco），并将标准化事件写入 SQL Server（dbo.HostBehaviors）。</p>
 
-<section class="card">
-  <h3>进程列表（示例）</h3>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>PID</th>
-          <th>进程名</th>
-          <th>父进程PID</th>
-          <th>命令行</th>
-          <th>创建时间</th>
-          <th>状态</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>1234</td>
-          <td>explorer.exe</td>
-          <td>1000</td>
-          <td>C:\Windows\explorer.exe</td>
-          <td>2026-01-12 08:00:00</td>
-          <td><span class="badge ok">运行中</span></td>
-        </tr>
-        <tr>
-          <td>5678</td>
-          <td>cmd.exe</td>
-          <td>1234</td>
-          <td>cmd.exe /c "whoami"</td>
-          <td>2026-01-12 10:30:15</td>
-          <td><span class="badge danger">可疑</span></td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-</section>
+<div style="margin: 12px 0; padding: 10px; border: 1px solid #ddd;">
+  <button id="btnStart" type="button">▶ 开始监听</button>
+  <button id="btnStop" type="button">■ 停止监听</button>
+
+  <span style="margin-left: 16px;">
+    主机筛选：
+    <select id="hostSelect">
+      <option value="">全部主机</option>
+      {% for hn in host_names %}
+        <option value="{{ hn }}">{{ hn }}</option>
+      {% endfor %}
+    </select>
+  </span>
+
+  <span style="margin-left: 16px;">
+    状态：<b id="statusText">unknown</b>
+  </span>
+  <span style="margin-left: 16px;">
+    已入库：<b id="countInserted">0</b>，去重跳过：<b id="countSkipped">0</b>，错误：<b id="countErrors">0</b>
+  </span>
+</div>
+
+<h3>最近行为事件</h3>
+<table id="eventsTable" border="1" cellpadding="6" cellspacing="0" style="width:100%; border-collapse: collapse;">
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>时间</th>
+      <th>host</th>
+      <th>event_type</th>
+      <th>action</th>
+      <th>process</th>
+      <th>pid/ppid</th>
+      <th>target</th>
+      <th>command_line</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<h3 style="margin-top: 18px;">进程树数据（简易）</h3>
+<pre id="processTreeBox" style="background:#f7f7f7; padding:10px; max-height: 240px; overflow:auto;"></pre>
+
+<h3 style="margin-top: 18px;">文件操作时间线（简易）</h3>
+<pre id="fileTimelineBox" style="background:#f7f7f7; padding:10px; max-height: 240px; overflow:auto;"></pre>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  let pollTimer = null;
+
+  function getHostNameFilter() {
+    const sel = document.getElementById('hostSelect');
+    return sel ? (sel.value || '') : '';
+  }
+
+  async function apiGet(url) {
+    const resp = await fetch(url, {method: 'GET'});
+    return await resp.json();
+  }
+
+  async function apiPost(url) {
+    const resp = await fetch(url, {method: 'POST'});
+    return await resp.json();
+  }
+
+  function setStatusText(text) {
+    document.getElementById('statusText').innerText = text;
+  }
+
+  function setCounters(counters) {
+    document.getElementById('countInserted').innerText = counters.inserted ?? 0;
+    document.getElementById('countSkipped').innerText = counters.skipped ?? 0;
+    document.getElementById('countErrors').innerText = counters.errors ?? 0;
+  }
+
+  function renderEvents(items) {
+    const tbody = document.querySelector('#eventsTable tbody');
+    tbody.innerHTML = '';
+    for (const it of items) {
+      const target = it.target_file || it.target_ip || '';
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${it.id}</td>
+        <td>${it.timestamp || ''}</td>
+        <td>${it.host || ''}</td>
+        <td>${it.event_type || ''}</td>
+        <td>${it.action || ''}</td>
+        <td>${it.process || ''}</td>
+        <td>${(it.pid ?? '')}/${(it.ppid ?? '')}</td>
+        <td>${target}</td>
+        <td style="max-width:520px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${(it.cmd || '').replaceAll('<','&lt;')}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+  }
+
+  async function refreshAll() {
+    const host = getHostNameFilter();
+    const qs = host ? `?host_name=${encodeURIComponent(host)}` : '';
+
+    // status
+    const st = await apiGet(`/behavior/status`);
+    setStatusText(st.running ? `running (${Math.floor(st.uptime_sec)}s)` : 'stopped');
+    if (st.counters) setCounters(st.counters);
+
+    // recent
+    const rec = await apiGet(`/behavior/recent${qs}&limit=50`.replace('?&', '?'));
+    if (rec.items) renderEvents(rec.items);
+
+    // process tree
+    const tree = await apiGet(`/behavior/process_tree${qs}&limit=500`.replace('?&', '?'));
+    document.getElementById('processTreeBox').innerText = JSON.stringify(tree, null, 2);
+
+    // file timeline
+    const tl = await apiGet(`/behavior/file_timeline${qs}&limit=500`.replace('?&', '?'));
+    document.getElementById('fileTimelineBox').innerText = JSON.stringify(tl, null, 2);
+  }
+
+  function startPolling() {
+    if (pollTimer) return;
+    pollTimer = setInterval(refreshAll, 2000);
+  }
+
+  function stopPolling() {
+    if (!pollTimer) return;
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+
+  document.getElementById('btnStart').addEventListener('click', async () => {
+    const r = await apiPost('/behavior/start');
+    await refreshAll();
+    startPolling();
+  });
+
+  document.getElementById('btnStop').addEventListener('click', async () => {
+    const r = await apiPost('/behavior/stop');
+    await refreshAll();
+    stopPolling();
+  });
+
+  document.getElementById('hostSelect').addEventListener('change', async () => {
+    await refreshAll();
+  });
+
+  // 初次加载
+  refreshAll();
+</script>
 {% endblock %}
