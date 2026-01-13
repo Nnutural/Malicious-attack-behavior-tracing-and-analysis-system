@@ -65,7 +65,7 @@ def list_hostlogs(
     conn_str: str | None = None,
 ) -> list[HostLogRow]:
     """
-    分页查询（最新在前）。
+    分页查询（按 id 升序，最早在前）。
     支持按 host_name 精确筛选：WHERE host_name = ?
     """
     if host_name:
@@ -73,7 +73,7 @@ def list_hostlogs(
         SELECT id, result, content, create_time, event_hash, host_name
         FROM dbo.HostLogs
         WHERE host_name = ?
-        ORDER BY id DESC
+        ORDER BY id ASC
         OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
         """
         params = [host_name, offset, limit]
@@ -81,7 +81,7 @@ def list_hostlogs(
         sql = """
         SELECT id, result, content, create_time, event_hash, host_name
         FROM dbo.HostLogs
-        ORDER BY id DESC
+        ORDER BY id ASC
         OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
         """
         params = [offset, limit]
