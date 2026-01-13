@@ -3,33 +3,28 @@
 {% block title %}日志详情 - 攻击溯源分析系统{% endblock %}
 
 {% block content %}
-<section class="page-head">
-  <div class="page-head-row">
-    <div>
-      <h2>日志详情</h2>
-      <p class="muted">展示单条日志的基本字段与原始内容（示例数据）。</p>
-    </div>
-    <div>
-      <a class="btn btn-secondary" href="{{ url_for('logs.list_logs') }}">返回列表</a>
-    </div>
-  </div>
-</section>
 
-<section class="card">
+  <h2>日志详情</h2>
+  <p>展示单条日志的归一化字段（result）与完整日志内容（content）。</p>
+
+  <a href="{{ url_for('logs.list_logs') }}">返回列表</a>
+
   <h3>日志 #{{ log.id }}</h3>
-  <div class="table-wrap">
-    <table>
-      <tbody>
-        <tr><th style="width:180px;">时间戳</th><td>{{ log.timestamp }}</td></tr>
-        <tr><th>主机名</th><td>{{ log.hostname }}</td></tr>
-        <tr><th>事件ID</th><td>{{ log.event_id }}</td></tr>
-        <tr><th>级别</th><td>{{ log.level }}</td></tr>
-        <tr><th>消息</th><td>{{ log.message }}</td></tr>
-      </tbody>
-    </table>
-  </div>
 
-  <h4 style="margin-top:16px;">原始日志</h4>
-  <pre class="pre">{{ log.raw_log }}</pre>
-</section>
+  <table>
+    <tbody>
+      <tr><th>时间戳</th><td>{{ log.timestamp }}</td></tr>
+      <tr><th>主机</th><td>{{ log.hostname }}</td></tr>
+      <tr><th>事件ID</th><td>{{ log.event_id }}</td></tr>
+      <tr><th>级别</th><td>{{ log.level }}</td></tr>
+      <tr><th>消息</th><td>{{ log.message }}</td></tr>
+    </tbody>
+  </table>
+
+  <h4>归一化结果（result）</h4>
+  <pre>{{ log.result_json_pretty }}</pre>
+
+  <h4>完整日志（content）</h4>
+  <pre>{{ log.raw_log }}</pre>
+
 {% endblock %}

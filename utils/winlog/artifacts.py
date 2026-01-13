@@ -6,7 +6,7 @@ import logging
 import shutil
 from pathlib import Path
 
-from .winlogbeat_config import generate_winlogbeat_config, generate_windows_collector_config
+from utils.winlog.legacy.winlogbeat_config import generate_winlogbeat_config, generate_windows_collector_config
 
 
 logger = logging.getLogger(__name__)
