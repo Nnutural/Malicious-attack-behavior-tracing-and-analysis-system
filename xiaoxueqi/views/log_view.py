@@ -1,4 +1,4 @@
-"""日志分析视图（SQL Server 版 HostLogs）"""
+"""日志分析视图（SQL Server 版 HostLogs + host_name 筛选）"""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from utils.winlog.service.hostlogs_ingest import ingest_windows_eventlog_to_sqls
 from utils.winlog.storage.hostlogs_sqlserver import (
     count_hostlogs,
     get_hostlog_by_id,
+    list_distinct_host_names,
     list_hostlogs,
     parse_result_json,
 )
@@ -38,23 +39,16 @@ def _level_from_event_type(event_type: str) -> str:
 
 
 def _map_row_to_log_item(row) -> dict:
-    """
-    将 dbo.HostLogs 的一行映射为页面需要的字段：
-    logs.html / log_detail.html 目前使用：
-    id, timestamp, hostname, level, event_id, message, raw_log
-    """
     event = parse_result_json(row.result)
     event_type = str(event.get("event_type") or "")
     return {
         "id": row.id,
         "timestamp": str(event.get("timestamp") or ""),
-        "hostname": str(event.get("host_ip") or ""),
+        "hostname": str(getattr(row, "host_name", None) or event.get("host_ip") or ""),
         "level": _level_from_event_type(event_type),
         "event_id": str(event.get("raw_id") or ""),
         "message": str(event.get("description") or ""),
-        # raw_log：详情页展示“完整日志”；此处优先用 content（更完整），否则用 result
         "raw_log": row.content or row.result or "",
-        # 额外给详情页使���（可选）
         "result_json_pretty": json.dumps(event, ensure_ascii=False, indent=2) if event else (row.result or ""),
     }
 
@@ -64,24 +58,36 @@ def list_logs():
     page = request.args.get("page", 1, type=int)
     page = max(page, 1)
 
+    host_name = (request.args.get("host_name") or "").strip() or None
+
     offset = (page - 1) * PAGE_SIZE
-    rows = list_hostlogs(offset=offset, limit=PAGE_SIZE)
+    rows = list_hostlogs(offset=offset, limit=PAGE_SIZE, host_name=host_name)
     logs = [_map_row_to_log_item(r) for r in rows]
 
     total = 0
     try:
-        total = count_hostlogs()
+        total = count_hostlogs(host_name=host_name)
     except Exception as exc:
         _get_logger().warning("统计 HostLogs 失败: %s", exc)
 
-    return render_template("logs.html", logs=logs, page=page, total=total)
+    host_names = []
+    try:
+        host_names = list_distinct_host_names(limit=200)
+    except Exception as exc:
+        _get_logger().warning("读取 host_name 下拉列表失败: %s", exc)
+
+    return render_template(
+        "logs.html",
+        logs=logs,
+        page=page,
+        total=total,
+        host_name=host_name,
+        host_names=host_names,
+    )
 
 
 @bp.route("/collect", methods=["POST"])
 def collect():
-    """
-    点击按钮：扫描本机 Windows Event Log 并入库 dbo.HostLogs。
-    """
     log = _get_logger()
     try:
         result = ingest_windows_eventlog_to_sqlserver(max_events=MAX_EVENTS_PER_LOAD, strict=False)
@@ -94,6 +100,9 @@ def collect():
         log.exception("采集入库失败: %s", exc)
         flash(f"采集入库失败：{exc}", "error")
 
+    host_name = (request.args.get("host_name") or "").strip()
+    if host_name:
+        return redirect(url_for("logs.list_logs", host_name=host_name))
     return redirect(url_for("logs.list_logs"))
 
 

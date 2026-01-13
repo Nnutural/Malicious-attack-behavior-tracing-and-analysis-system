@@ -4,10 +4,6 @@
 
 {% block extra_css %}
 <style>
-  /* 轻量美化：不引入外部库，尽量跟其他页面一致 */
-  .logs-page h2 { margin-bottom: 6px; }
-  .logs-page .desc { color: #666; margin-top: 0; }
-
   .toolbar {
     display: flex;
     gap: 12px;
@@ -20,6 +16,7 @@
     border-radius: 10px;
     margin: 12px 0 14px;
   }
+  .toolbar-left, .toolbar-right { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
 
   .btn {
     border: 1px solid #2b6cb0;
@@ -34,202 +31,141 @@
     gap: 8px;
   }
   .btn:hover { background: #2b6cb0; }
-  .btn:active { transform: translateY(1px); }
 
-  .badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 2px 10px;
-    border-radius: 999px;
-    font-size: 12px;
+  .btn-ghost{
     border: 1px solid #e6e6e6;
     background: #fff;
-    white-space: nowrap;
-  }
-  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-  .badge.info .dot { background: #22c55e; }
-  .badge.warning .dot { background: #f59e0b; }
-  .badge.error .dot { background: #ef4444; }
-
-  .stats {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    align-items: center;
-    color: #555;
-    font-size: 13px;
-  }
-  .stat {
-    border: 1px solid #e6e6e6;
-    background: #fff;
-    padding: 6px 10px;
-    border-radius: 999px;
-  }
-
-  .flash {
-    margin: 10px 0 0;
+    color: #111827;
     padding: 10px 12px;
     border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    text-decoration: none;
+    display:inline-flex;
+    align-items:center;
+    gap: 8px;
+  }
+  .btn-ghost:hover{ background:#f8fafc; }
+
+  .field {
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding: 8px 10px;
     border: 1px solid #e6e6e6;
     background: #fff;
+    border-radius: 8px;
+  }
+  .field label { color:#374151; font-size:13px; font-weight:600; }
+  .field select{
+    border: none;
+    outline: none;
     font-size: 13px;
+    min-width: 220px;
   }
-  .flash.info { border-color: #bfdbfe; background: #eff6ff; color: #1e3a8a; }
-  .flash.error { border-color: #fecaca; background: #fff1f2; color: #7f1d1d; }
-  .flash strong { margin-right: 6px; }
 
-  /* === 表格固定列宽：关键点 === */
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    border: 1px solid #e6e6e6;
-    border-radius: 10px;
-    overflow: hidden;
-    background: #fff;
-
-    table-layout: fixed; /* 关键：列宽不随内容变化 */
-  }
-  thead th {
-    text-align: left;
-    background: #f8fafc;
-    border-bottom: 1px solid #e6e6e6;
-    color: #334155;
-    font-size: 13px;
-    padding: 10px 12px;
-
-    white-space: nowrap;
-  }
-  tbody td {
-    border-bottom: 1px solid #f0f0f0;
-    padding: 10px 12px;
-    font-size: 13px;
-    color: #111827;
-    vertical-align: top;
-  }
-  tbody tr:hover td { background: #fcfcfc; }
-  tbody tr:last-child td { border-bottom: none; }
-
-  /* 超长内容处理：默认一行省略号 */
-  .clip {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+  table { width: 100%; border-collapse: collapse; border: 1px solid #e6e6e6; background:#fff; border-radius:10px; overflow:hidden; table-layout: fixed; }
+  thead th { text-align:left; background:#f8fafc; border-bottom:1px solid #e6e6e6; color:#334155; font-size:13px; padding:10px 12px; white-space:nowrap; }
+  tbody td { border-bottom:1px solid #f0f0f0; padding:10px 12px; font-size:13px; color:#111827; vertical-align:top; }
+  tbody tr:hover td { background:#fcfcfc; }
+  tbody tr:last-child td { border-bottom:none; }
 
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-  .link { color: #2563eb; text-decoration: none; font-weight: 600; }
-  .link:hover { text-decoration: underline; }
+  .clip { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .link { color:#2563eb; text-decoration:none; font-weight:600; }
+  .link:hover { text-decoration:underline; }
 
-  /* 分页：左上一页，中间页数/总页数，右下一页 */
-  .pagination {
-    display: grid;
-    grid-template-columns: 1fr auto 1fr;
-    align-items: center;
-    gap: 10px;
-    margin-top: 12px;
+  .pagination { display:grid; grid-template-columns: 1fr auto 1fr; align-items:center; gap:10px; margin-top:12px; }
+  .pager-left{ justify-self:start; }
+  .pager-mid{ justify-self:center; color:#555; font-size:13px; }
+  .pager-right{ justify-self:end; }
+  .page-btn, .page-btn-disabled{
+    display:inline-flex; align-items:center; gap:6px;
+    padding: 8px 10px; border-radius:8px;
+    border:1px solid #e6e6e6; background:#fff;
+    color:#111827; text-decoration:none; font-weight:600; font-size:13px; white-space:nowrap;
   }
-  .pager-left { justify-self: start; }
-  .pager-mid { justify-self: center; color: #555; font-size: 13px; }
-  .pager-right { justify-self: end; }
+  .page-btn:hover{ background:#f8fafc; }
+  .page-btn-disabled{ opacity:.5; cursor:not-allowed; }
 
-  .page-btn, .page-btn-disabled {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 10px;
-    border-radius: 8px;
-    border: 1px solid #e6e6e6;
-    background: #fff;
-    color: #111827;
-    text-decoration: none;
-    font-weight: 600;
-    font-size: 13px;
-    white-space: nowrap;
-  }
-  .page-btn:hover { background: #f8fafc; }
-  .page-btn-disabled { opacity: .5; cursor: not-allowed; }
-
-  @media (max-width: 760px) {
-    .hide-sm { display: none; }
-    .pagination { grid-template-columns: 1fr; justify-items: stretch; }
-    .pager-left, .pager-right { justify-self: stretch; }
-    .page-btn, .page-btn-disabled { justify-content: center; width: 100%; }
-    .pager-mid { justify-self: center; }
-  }
+  .flash { margin: 10px 0 0; padding: 10px 12px; border-radius: 8px; border: 1px solid #e6e6e6; background: #fff; font-size: 13px; }
+  .flash.info { border-color: #bfdbfe; background: #eff6ff; color: #1e3a8a; }
+  .flash.error { border-color: #fecaca; background: #fff1f2; color: #7f1d1d; }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="logs-page">
 
   <h2>主机日志分析</h2>
-  <p class="desc">点击按钮扫描本机 Windows Event Log，归一化后写入 SQL Server（dbo.HostLogs）。</p>
+  <p>扫描本机 Windows Event Log，归一化后写入 SQL Server（dbo.HostLogs）。支持按 <b>host_name(ComputerName)</b> 精确筛选。</p>
 
-  {# 计算总页数（不改后端逻辑） #}
   {% set page_size = 20 %}
   {% set total_pages = ((total + page_size - 1) // page_size) if total is not none else 1 %}
   {% if total_pages < 1 %}{% set total_pages = 1 %}{% endif %}
 
   <div class="toolbar">
-    <form method="post" action="{{ url_for('logs.collect') }}">
-      <button class="btn" type="submit" title="扫描本机 Security/System 并写入数据库">
-        <span aria-hidden="true">🖥️</span>
-        <span>扫描本机日志并入库</span>
-      </button>
-    </form>
+    <div class="toolbar-left">
+      <form method="post" action="{{ url_for('logs.collect', host_name=host_name) }}">
+        <button class="btn" type="submit" title="扫描本机 Security/System 并写入数据库">
+          <span aria-hidden="true">🖥️</span>
+          <span>扫描本机日志并入库</span>
+        </button>
+      </form>
 
-    <div class="stats">
-      <span class="stat">📦 总数：<b>{{ total }}</b></span>
-      <span class="stat">📄 当前页：<b>{{ page }}</b></span>
-      <span class="stat">🧭 总页数：<b>{{ total_pages }}</b></span>
+      <form method="get" action="{{ url_for('logs.list_logs') }}">
+        <div class="field">
+          <label for="host_name">主机筛选</label>
+          <select id="host_name" name="host_name">
+            <option value="">全部主机</option>
+            {% for hn in host_names %}
+              <option value="{{ hn }}" {% if host_name == hn %}selected{% endif %}>{{ hn }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn-ghost" type="submit">筛选</button>
+          <a class="btn-ghost" href="{{ url_for('logs.list_logs') }}">清除</a>
+        </div>
+      </form>
     </div>
+
+    <div class="toolbar-right" style="color:#555;font-size:13px;">
+      <span>📦 总数：<b>{{ total }}</b></span>
+      <span>📄 第 <b>{{ page }}</b> / <b>{{ total_pages }}</b> 页</span>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, msg in messages %}
+          <div class="flash {{ category }}" style="width:100%;">
+            <strong>{{ category }}:</strong> {{ msg }}
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
   </div>
 
-  {# flash 消息：稍微加个颜色 #}
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% if messages %}
-      {% for category, msg in messages %}
-        <div class="flash {{ category }}">
-          <strong>{{ category }}:</strong> {{ msg }}
-        </div>
-      {% endfor %}
-    {% endif %}
-  {% endwith %}
-
-  <h3 style="margin-top: 14px;">日志列表</h3>
+  <h3>日志列表</h3>
 
   <table>
     <thead>
       <tr>
-        <th style="width: 80px;">ID</th>
-        <th style="width: 190px;">时间</th>
-        <th style="width: 180px;">主机</th>
-        <th style="width: 120px;">级别</th>
-        <th style="width: 110px;">事件ID</th>
+        <th style="width:80px;">ID</th>
+        <th style="width:190px;">时间</th>
+        <th style="width:200px;">主机（host_name）</th>
+        <th style="width:110px;">级别</th>
+        <th style="width:110px;">事件ID</th>
         <th>消息</th>
-        <th style="width: 90px;">操作</th>
+        <th style="width:90px;">操作</th>
       </tr>
     </thead>
     <tbody>
       {% for log in logs %}
       <tr>
-        <td class="mono clip" title="{{ log.id }}">{{ log.id }}</td>
+        <td class="mono clip">{{ log.id }}</td>
         <td class="mono clip" title="{{ log.timestamp }}">{{ log.timestamp }}</td>
         <td class="clip" title="{{ log.hostname }}">{{ log.hostname }}</td>
-        <td>
-          {% if log.level == 'ERROR' %}
-            <span class="badge error"><span class="dot"></span>ERROR</span>
-          {% elif log.level == 'WARNING' %}
-            <span class="badge warning"><span class="dot"></span>WARNING</span>
-          {% else %}
-            <span class="badge info"><span class="dot"></span>INFO</span>
-          {% endif %}
-        </td>
-        <td class="mono clip" title="{{ log.event_id }}">{{ log.event_id }}</td>
-        <td class="clip" title="{{ log.message }}">
-          {{ log.message }}
-        </td>
+        <td class="clip">{{ log.level }}</td>
+        <td class="mono clip">{{ log.event_id }}</td>
+        <td class="clip" title="{{ log.message }}">{{ log.message }}</td>
         <td><a class="link" href="{{ url_for('logs.detail', log_id=log.id) }}">详情</a></td>
       </tr>
       {% endfor %}
@@ -237,7 +173,7 @@
       {% if logs|length == 0 %}
       <tr>
         <td colspan="7" style="color:#6b7280; padding: 14px 12px;">
-          暂无数据。请点击上方“扫描本机日志并入库”。
+          暂无数据。请点击上方“扫描本机日志并入库”或调整筛选条件。
         </td>
       </tr>
       {% endif %}
@@ -247,7 +183,7 @@
   <div class="pagination">
     <div class="pager-left">
       {% if page > 1 %}
-        <a class="page-btn" href="{{ url_for('logs.list_logs', page=page-1) }}">⬅ 上一页</a>
+        <a class="page-btn" href="{{ url_for('logs.list_logs', page=page-1, host_name=host_name) }}">⬅ 上一页</a>
       {% else %}
         <span class="page-btn-disabled">⬅ 上一页</span>
       {% endif %}
@@ -259,12 +195,11 @@
 
     <div class="pager-right">
       {% if page < total_pages %}
-        <a class="page-btn" href="{{ url_for('logs.list_logs', page=page+1) }}">下一页 ➡</a>
+        <a class="page-btn" href="{{ url_for('logs.list_logs', page=page+1, host_name=host_name) }}">下一页 ➡</a>
       {% else %}
         <span class="page-btn-disabled">下一页 ➡</span>
       {% endif %}
     </div>
   </div>
 
-</div>
 {% endblock %}
