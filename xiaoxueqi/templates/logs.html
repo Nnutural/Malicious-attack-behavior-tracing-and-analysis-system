@@ -108,6 +108,18 @@
   .page-btn:hover{ background:#f8fafc; }
   .page-btn-disabled{ opacity:.5; cursor:not-allowed; }
 
+  .page-jump {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .page-input {
+    width: 72px;
+    padding: 6px 8px;
+    border: 1px solid #e6e6e6;
+    border-radius: 6px;
+  }
+
   .flash { margin: 10px 0 0; padding: 10px 12px; border-radius: 8px; border: 1px solid #e6e6e6; background: #fff; font-size: 13px; }
   .flash.info { border-color: #bfdbfe; background: #eff6ff; color: #1e3a8a; }
   .flash.error { border-color: #fecaca; background: #fff1f2; color: #7f1d1d; }
@@ -120,8 +132,10 @@
   <p>扫描服务器 Windows Event Log，归一化后写入 SQL Server（dbo.HostLogs）。支持按 <b>host_name(ComputerName)</b> 精确筛选。</p>
 
   {% set page_size = 20 %}
-  {% set total_pages = ((total + page_size - 1) // page_size) if total is not none else 1 %}
-  {% if total_pages < 1 %}{% set total_pages = 1 %}{% endif %}
+  {% if total_pages is not defined %}
+    {% set total_pages = ((total + page_size - 1) // page_size) if total is not none else 1 %}
+    {% if total_pages < 1 %}{% set total_pages = 1 %}{% endif %}
+  {% endif %}
 
   <div class="toolbar">
     <div class="toolbar-left">
@@ -178,6 +192,41 @@
     {% endwith %}
   </div>
 
+  <div class="pagination">
+    <div class="pager-left">
+      {% if page > 1 %}
+        <a class="page-btn" href="{{ url_for('logs.list_logs', page=page-1, host_name=host_name) }}">⬅ 上一页</a>
+      {% else %}
+        <span class="page-btn-disabled">⬅ 上一页</span>
+      {% endif %}
+    </div>
+
+    <div class="pager-mid">
+      <form class="page-jump" method="get" action="{{ url_for('logs.list_logs') }}">
+        <input type="hidden" name="host_name" value="{{ host_name or '' }}">
+        <span>页码</span>
+        <input
+          class="page-input"
+          type="number"
+          name="page"
+          min="1"
+          max="{{ total_pages }}"
+          value="{{ page }}"
+        >
+        <button class="btn-ghost" type="submit">跳转</button>
+        <span>/ {{ total_pages }}</span>
+      </form>
+    </div>
+
+    <div class="pager-right">
+      {% if page < total_pages %}
+        <a class="page-btn" href="{{ url_for('logs.list_logs', page=page+1, host_name=host_name) }}">下一页 ➡</a>
+      {% else %}
+        <span class="page-btn-disabled">下一页 ➡</span>
+      {% endif %}
+    </div>
+  </div>
+
   <h3>日志列表</h3>
 
   <table>
@@ -208,33 +257,11 @@
       {% if logs|length == 0 %}
       <tr>
         <td colspan="7" style="color:#6b7280; padding: 14px 12px;">
-          暂无数据。请点击上方“扫描本机日志并入库”或调整筛选条件。
+          暂无数据。请点击上方“扫描服务器日志并入库”或调整筛选条件。
         </td>
       </tr>
       {% endif %}
     </tbody>
   </table>
-
-  <div class="pagination">
-    <div class="pager-left">
-      {% if page > 1 %}
-        <a class="page-btn" href="{{ url_for('logs.list_logs', page=page-1, host_name=host_name) }}">⬅ 上一页</a>
-      {% else %}
-        <span class="page-btn-disabled">⬅ 上一页</span>
-      {% endif %}
-    </div>
-
-    <div class="pager-mid">
-      第 <span class="mono">{{ page }}</span> / <span class="mono">{{ total_pages }}</span> 页
-    </div>
-
-    <div class="pager-right">
-      {% if page < total_pages %}
-        <a class="page-btn" href="{{ url_for('logs.list_logs', page=page+1, host_name=host_name) }}">下一页 ➡</a>
-      {% else %}
-        <span class="page-btn-disabled">下一页 ➡</span>
-      {% endif %}
-    </div>
-  </div>
 
 {% endblock %}
