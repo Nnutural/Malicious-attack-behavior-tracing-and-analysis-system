@@ -1,4 +1,18 @@
-"""Winlogbeat NDJSON 解析器：主机日志提取与归一化。"""
+"""
+Winlogbeat NDJSON 解析器：主机日志提取与归一化。
+
+增强点（为 SQLServer 入库/详情展示服务）：
+- extract_host_logs_from_windows_eventlog 新增 use_bookmark 参数：
+  - True: 增量采集（默认，使用 StateStore 的 last_record_id）
+  - False: 每次都抓取最新 max_events（用于演示按钮）
+- 当 include_xml=True 时，在归一化结果里附带私有字段：
+  - _raw_xml: Windows Event XML 原文（用于 content）
+  - _computer_name: 事件所属主机名（用于 host_name）
+  这些字段不会影响接口字段；入库时应从 result 中移除。
+
+同时保留兼容能力：
+- extract_host_logs_from_winlogbeat_ndjson: 解析 winlogbeat 输出的 ndjson 文件
+"""
 
 from __future__ import annotations
 
@@ -8,12 +22,10 @@ import platform
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
-import xml.etree.ElementTree as ET
+from typing import Any, Iterable
 
 from .collector_windows import WindowsEventCollector
 from .state_store import StateStore
-
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +44,7 @@ EVENT_TYPE_MAP = {
     "1102": "log_clear",
 }
 
-EVENT_TYPE_ALIASES = {
-    "login_success": "user_logon",
-}
-
+EVENT_TYPE_ALIASES = {"login_success": "user_logon"}
 ALLOWED_EVENT_TYPES = set(EVENT_TYPE_MAP.values())
 
 IPV4_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
@@ -70,6 +79,15 @@ def _get_event_data_value(event_data: dict[str, Any], candidates: list[str]) -> 
     return None
 
 
+def _handle_error(strict: bool, message: str, *, filename: str, line_no: int, raw_id: str | None = None) -> None:
+    detail = f"{filename}:{line_no}: {message}"
+    if raw_id is not None:
+        detail += f" (raw_id={raw_id})"
+    if strict:
+        raise ValueError(detail)
+    logger.warning(detail)
+
+
 def _parse_iso8601(
     value: str,
     *,
@@ -79,13 +97,7 @@ def _parse_iso8601(
     raw_id: str | None = None,
 ) -> datetime | None:
     if not value:
-        _handle_error(
-            strict,
-            "缺少时间戳",
-            filename=filename,
-            line_no=line_no,
-            raw_id=raw_id,
-        )
+        _handle_error(strict, "缺少时间戳", filename=filename, line_no=line_no, raw_id=raw_id)
         return None
 
     text = value.strip()
@@ -111,13 +123,7 @@ def _parse_iso8601(
     try:
         dt = datetime.fromisoformat(text)
     except ValueError as exc:
-        _handle_error(
-            strict,
-            f"时间戳格式无效 '{value}': {exc}",
-            filename=filename,
-            line_no=line_no,
-            raw_id=raw_id,
-        )
+        _handle_error(strict, f"时间戳格式无效 '{value}': {exc}", filename=filename, line_no=line_no, raw_id=raw_id)
         return None
     if dt.tzinfo is None:
         logger.warning("%s:%d: 时间戳无时区信息，默认按 UTC 处理: %s", filename, line_no, value)
@@ -127,75 +133,6 @@ def _parse_iso8601(
 
 def _format_zulu(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _parse_event_data_from_xml(xml_text: str) -> dict[str, Any]:
-    try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError:
-        return {}
-    data: dict[str, Any] = {}
-    for elem in root.findall(".//{*}EventData/{*}Data"):
-        name = elem.attrib.get("Name")
-        if not name:
-            continue
-        data[name] = (elem.text or "").strip()
-    if not data:
-        for elem in root.findall(".//{*}UserData//{*}Data"):
-            name = elem.attrib.get("Name")
-            if not name:
-                continue
-            data[name] = (elem.text or "").strip()
-    return data
-
-
-def _get_event_data(record: dict[str, Any]) -> dict[str, Any]:
-    winlog = record.get("winlog") or {}
-    event_data = winlog.get("event_data") or {}
-    if isinstance(event_data, dict) and event_data:
-        return event_data
-    if event_data and not isinstance(event_data, dict):
-        logger.warning("winlog.event_data 类型异常: %s", type(event_data).__name__)
-    event = record.get("event") or {}
-    xml_text = event.get("original") or winlog.get("xml")
-    if xml_text:
-        return _parse_event_data_from_xml(xml_text)
-    return {}
-
-
-def _select_host_ip(record: dict[str, Any], override: str | None) -> str | None:
-    if override:
-        return override
-    host = record.get("host") or {}
-    host_ip = host.get("ip")
-    if isinstance(host_ip, list):
-        for item in host_ip:
-            if isinstance(item, str) and IPV4_RE.match(item):
-                return item
-        for item in host_ip:
-            if item:
-                return str(item)
-    elif host_ip:
-        return str(host_ip)
-    winlog = record.get("winlog") or {}
-    computer_name = winlog.get("computer_name")
-    if computer_name:
-        return str(computer_name)
-    agent = record.get("agent") or {}
-    hostname = agent.get("hostname")
-    if hostname:
-        return str(hostname)
-    return None
-
-
-def _get_raw_event_id(record: dict[str, Any]) -> str | None:
-    event = record.get("event") or {}
-    if "code" in event and event["code"] is not None:
-        return str(event["code"])
-    winlog = record.get("winlog") or {}
-    if "event_id" in winlog and winlog["event_id"] is not None:
-        return str(winlog["event_id"])
-    return None
 
 
 def _extract_event_type_from_record(record: dict[str, Any]) -> str | None:
@@ -214,9 +151,7 @@ def _extract_event_type_from_record(record: dict[str, Any]) -> str | None:
     return None
 
 
-def _resolve_event_type(
-    raw_id: str, record_context: dict[str, Any] | None, strict: bool, record_ref: str
-) -> str | None:
+def _resolve_event_type(raw_id: str, record_context: dict[str, Any] | None, strict: bool, record_ref: str) -> str | None:
     event_type = EVENT_TYPE_MAP.get(raw_id)
     if event_type:
         return event_type
@@ -231,41 +166,30 @@ def _resolve_event_type(
     return None
 
 
-def _extract_entities(
-    *,
-    event_type: str,
-    event_data: dict[str, Any],
-    record_context: dict[str, Any] | None,
-    record_ref: str,
-) -> dict[str, Any]:
+def _extract_entities(*, event_type: str, event_data: dict[str, Any], record_context: dict[str, Any] | None, record_ref: str) -> dict[str, Any]:
     entities: dict[str, Any] = {}
-    user_value = _get_event_data_value(event_data, ["TargetUserName", "SubjectUserName"])
-    if not user_value and record_context:
-        user_value = (record_context.get("user") or {}).get("name")
+    user_value = _get_event_data_value(event_data, ["TargetUserName", "SubjectUserName", "user.name", "user"])
     if user_value:
         entities["user"] = user_value
 
     src_ip_value = _get_event_data_value(
-        event_data, ["IpAddress", "SourceNetworkAddress", "Source Network Address", "ClientAddress"]
+        event_data,
+        ["IpAddress", "SourceNetworkAddress", "Source Network Address", "ClientAddress", "source.ip", "src_ip"],
     )
-    if not src_ip_value and record_context:
-        src_ip_value = (record_context.get("source") or {}).get("ip")
     if src_ip_value:
         entities["src_ip"] = src_ip_value
 
-    session_id_value = _get_event_data_value(
-        event_data, ["TargetLogonId", "SubjectLogonId", "LogonId"]
-    )
+    session_id_value = _get_event_data_value(event_data, ["TargetLogonId", "SubjectLogonId", "LogonId"])
     if session_id_value is not None:
         entities["session_id"] = str(session_id_value)
     elif event_type in ("user_logon", "user_logoff", "user_logon_failed"):
         logger.warning("%s: 缺少 session_id，事件类型=%s", record_ref, event_type)
 
     if event_type == "process_creation_log":
-        process_name = _get_event_data_value(event_data, ["NewProcessName"])
-        pid = _get_event_data_value(event_data, ["NewProcessId"])
-        parent_process = _get_event_data_value(event_data, ["ParentProcessName", "Creator Process Name"])
-        command_line = _get_event_data_value(event_data, ["CommandLine", "Process Command Line"])
+        process_name = _get_event_data_value(event_data, ["NewProcessName", "process.executable", "process.name"])
+        pid = _get_event_data_value(event_data, ["NewProcessId", "process.pid"])
+        parent_process = _get_event_data_value(event_data, ["ParentProcessName", "process.parent.name"])
+        command_line = _get_event_data_value(event_data, ["CommandLine", "process.command_line"])
         if process_name:
             entities["process_name"] = process_name
         if pid:
@@ -336,12 +260,7 @@ def _build_host_log_event(
     if not event_type:
         return None
 
-    entities = _extract_entities(
-        event_type=event_type,
-        event_data=event_data,
-        record_context=record_context,
-        record_ref=record_ref,
-    )
+    entities = _extract_entities(event_type=event_type, event_data=event_data, record_context=record_context, record_ref=record_ref)
 
     aligned_dt = event_dt
     if enable_time_alignment and clock_offset_ms:
@@ -364,154 +283,6 @@ def _build_host_log_event(
     }
 
 
-def _handle_error(
-    strict: bool,
-    message: str,
-    *,
-    filename: str,
-    line_no: int,
-    raw_id: str | None = None,
-) -> None:
-    detail = f"{filename}:{line_no}: {message}"
-    if raw_id is not None:
-        detail += f" (raw_id={raw_id})"
-    if strict:
-        raise ValueError(detail)
-    logger.warning(detail)
-
-
-def extract_host_logs_from_winlogbeat_ndjson(
-    ndjson_path: str | Path,
-    *,
-    host_ip: str | None = None,
-    clock_offset_ms: int = 0,
-    enable_time_alignment: bool = True,
-    strict: bool = True,
-) -> list[dict]:
-    """从 Winlogbeat NDJSON 中提取并归一化主机日志（兼容输入适配器）。
-
-    Args:
-        ndjson_path: Winlogbeat NDJSON 文件路径（每行一个 JSON）。
-        host_ip: 可选的主机 IP/主机名覆盖值。
-        clock_offset_ms: 对事件时间戳应用的固定偏移（毫秒）。
-        enable_time_alignment: 是否应用时间对齐与诊断逻辑。
-        strict: 为 True 时，字段缺失/格式错误抛出 ValueError。
-
-    Returns:
-        归一化后的事件列表，每条包含：
-            data_source、timestamp(UTC ISO8601 Z)、host_ip、event_type、
-            raw_id、entities、description。
-
-    Raises:
-        ValueError: strict=True 时遇到 JSON 解析失败、字段缺失或时间格式错误。
-    """
-    path = Path(ndjson_path)
-    delays_ms: list[int] = []
-    results: list[dict] = []
-
-    with path.open("r", encoding="utf-8", errors="replace") as handle:
-        for line_no, raw_line in enumerate(handle, start=1):
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError as exc:
-                _handle_error(
-                    strict,
-                    f"JSON 解析失败: {exc}",
-                    filename=str(path),
-                    line_no=line_no,
-                )
-                continue
-
-            raw_id = _get_raw_event_id(record)
-            if not raw_id:
-                _handle_error(
-                    strict,
-                    "缺少事件 ID（event.code 或 winlog.event_id）",
-                    filename=str(path),
-                    line_no=line_no,
-                )
-                continue
-
-            ts_value = record.get("@timestamp")
-            if not ts_value:
-                _handle_error(
-                    strict,
-                    "缺少 @timestamp",
-                    filename=str(path),
-                    line_no=line_no,
-                    raw_id=raw_id,
-                )
-                continue
-            event_dt = _parse_iso8601(
-                ts_value,
-                filename=str(path),
-                line_no=line_no,
-                strict=strict,
-                raw_id=raw_id,
-            )
-            if event_dt is None:
-                continue
-
-            host_ip_value = _select_host_ip(record, host_ip)
-            if not host_ip_value:
-                _handle_error(
-                    strict,
-                    "缺少主机 IP/主机名",
-                    filename=str(path),
-                    line_no=line_no,
-                    raw_id=raw_id,
-                )
-                continue
-
-            event_data = _get_event_data(record)
-            record_ref = f"{path}:{line_no}"
-
-            ingest_dt = None
-            if enable_time_alignment and clock_offset_ms == 0:
-                created_value = (record.get("event") or {}).get("created")
-                if created_value:
-                    ingest_dt = _parse_iso8601(
-                        created_value,
-                        filename=str(path),
-                        line_no=line_no,
-                        strict=False,
-                    )
-
-            normalized = _build_host_log_event(
-                raw_id=raw_id,
-                event_dt=event_dt,
-                ingest_dt=ingest_dt,
-                host_ip=host_ip_value,
-                event_data=event_data,
-                record_context=record,
-                strict=strict,
-                record_ref=record_ref,
-                clock_offset_ms=clock_offset_ms,
-                enable_time_alignment=enable_time_alignment,
-                delays_ms=delays_ms,
-            )
-            if normalized:
-                results.append(normalized)
-
-    if delays_ms:
-        negative = sum(1 for value in delays_ms if value < 0)
-        large = sum(1 for value in delays_ms if value > INGEST_DELAY_WARN_MS)
-        if negative or large:
-            logger.warning(
-                "采集延迟异常 %s: 负值=%d, 过大=%d, 最小=%d, 最大=%d",
-                path,
-                negative,
-                large,
-                min(delays_ms),
-                max(delays_ms),
-            )
-
-    return results
-
-
 def extract_host_logs_from_windows_eventlog(
     *,
     channels: list[str] | None = None,
@@ -528,45 +299,37 @@ def extract_host_logs_from_windows_eventlog(
     prefer_latest: bool = True,
     use_pywin32: bool = True,
     use_wevtutil_fallback: bool = True,
+    use_bookmark: bool = True,
 ) -> list[dict]:
-    """从 Windows Event Log 系统内采集并归一化主机日志。
+    """
+    从 Windows Event Log 系统内采集并归一化主机日志。
 
-    Args:
-        channels: 采集通道列表，如 ["Security", "System"]。
-        event_ids: 事件 ID 过滤列表，默认使用支持的事件集合。
-        include_xml: 是否在 RawEvent 中保留 XML 原文。
-        batch_size: 批量读取大小。
-        max_events: 最大采集事件数。
-        timeout_sec: 采集超时（部分实现可能忽略）。
-        host_ip: 可选的主机 IP/主机名覆盖值。
-        clock_offset_ms: 对事件时间戳应用的固定偏移（毫秒）。
-        enable_time_alignment: 是否应用时间对齐与诊断逻辑。
-        strict: 为 True 时，字段缺失/格式错误抛出 ValueError。
-        state_store: 断点续读状态存储。
-        prefer_latest: 是否优先读取最新事件。
-        use_pywin32: 是否优先使用 pywin32。
-        use_wevtutil_fallback: 是否使用 wevtutil 作为备用路径。
-
-    Returns:
-        归一化后的事件列表（host_log）。
+    use_bookmark:
+      - True（默认）：增量采集（使用 StateStore 的 last_record_id）
+      - False：每次抓取最新 max_events（用于按钮重复点击演示）
     """
     if platform.system().lower() != "windows":
         raise NotImplementedError("Windows Event Log 采集仅支持 Windows 平台")
 
     event_ids = event_ids or sorted(EVENT_TYPE_MAP.keys())
+    store = state_store or StateStore()
+
+    if not use_bookmark:
+        tmp_path = (StateStore().path.parent / "winevent_state_ephemeral.json")
+        store = StateStore(path=tmp_path)
+
     collector = WindowsEventCollector(
         channels=channels,
         event_ids=event_ids,
         include_xml=include_xml,
         batch_size=batch_size,
-        state_store=state_store or StateStore(),
+        state_store=store,
         prefer_latest=prefer_latest,
         use_pywin32=use_pywin32,
         use_wevtutil_fallback=use_wevtutil_fallback,
     )
 
     raw_events = collector.collect(max_events=max_events, timeout_sec=timeout_sec)
-    delays_ms: list[int] = []
     results: list[dict] = []
 
     for index, raw_event in enumerate(raw_events, start=1):
@@ -577,35 +340,18 @@ def extract_host_logs_from_windows_eventlog(
 
         raw_id_value = raw_event.get("event_id")
         if raw_id_value is None:
-            _handle_error(
-                strict,
-                "缺少事件 ID",
-                filename=channel,
-                line_no=record_no,
-            )
+            _handle_error(strict, "缺少事件 ID", filename=channel, line_no=record_no)
             continue
         raw_id = str(raw_id_value)
 
         system_time = raw_event.get("system_time_utc")
-        event_dt = _parse_iso8601(
-            system_time or "",
-            filename=channel,
-            line_no=record_no,
-            strict=strict,
-            raw_id=raw_id,
-        )
+        event_dt = _parse_iso8601(system_time or "", filename=channel, line_no=record_no, strict=strict, raw_id=raw_id)
         if event_dt is None:
             continue
 
         host_value = host_ip or raw_event.get("computer_name") or raw_event.get("host_ip")
         if not host_value:
-            _handle_error(
-                strict,
-                "缺少主机 IP/主机名",
-                filename=channel,
-                line_no=record_no,
-                raw_id=raw_id,
-            )
+            _handle_error(strict, "缺少主机 IP/主机名", filename=channel, line_no=record_no, raw_id=raw_id)
             continue
 
         event_data = raw_event.get("event_data")
@@ -616,12 +362,7 @@ def extract_host_logs_from_windows_eventlog(
         if enable_time_alignment and clock_offset_ms == 0:
             ingest_time = raw_event.get("ingest_time_utc")
             if ingest_time:
-                ingest_dt = _parse_iso8601(
-                    ingest_time,
-                    filename=channel,
-                    line_no=record_no,
-                    strict=False,
-                )
+                ingest_dt = _parse_iso8601(ingest_time, filename=channel, line_no=record_no, strict=False)
 
         normalized = _build_host_log_event(
             raw_id=raw_id,
@@ -634,38 +375,89 @@ def extract_host_logs_from_windows_eventlog(
             record_ref=record_ref,
             clock_offset_ms=clock_offset_ms,
             enable_time_alignment=enable_time_alignment,
-            delays_ms=delays_ms,
+            delays_ms=None,
         )
-        if normalized:
-            results.append(normalized)
+        if not normalized:
+            continue
 
-    if delays_ms:
-        negative = sum(1 for value in delays_ms if value < 0)
-        large = sum(1 for value in delays_ms if value > INGEST_DELAY_WARN_MS)
-        if negative or large:
-            logger.warning(
-                "采集延迟异常 windows_eventlog: 负值=%d, 过大=%d, 最小=%d, 最大=%d",
-                negative,
-                large,
-                min(delays_ms),
-                max(delays_ms),
-            )
+        if include_xml:
+            normalized["_raw_xml"] = raw_event.get("xml")
+            normalized["_computer_name"] = raw_event.get("computer_name")
+
+        results.append(normalized)
 
     return results
 
 
-if __name__ == "__main__":
-    import argparse
-    import json
+def extract_host_logs_from_winlogbeat_ndjson(
+    ndjson_path: str | Path,
+    *,
+    strict: bool = True,
+    clock_offset_ms: int = 0,
+    enable_time_alignment: bool = True,
+) -> list[dict]:
+    """
+    兼容 Winlogbeat output.file 生成的 NDJSON 文件回放。
+    这条路径目前页面没用，但 utils.winlog.__init__ 仍导出它，必须保留以免 ImportError。
+    """
+    path = Path(ndjson_path)
+    if not path.exists():
+        if strict:
+            raise FileNotFoundError(f"未找到 NDJSON 文件: {path}")
+        logger.warning("未找到 NDJSON 文件: %s", path)
+        return []
 
-    from .session_rebuild import rebuild_logon_sessions
+    results: list[dict] = []
+    for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        text = line.strip()
+        if not text:
+            continue
+        try:
+            record = json.loads(text)
+        except json.JSONDecodeError as exc:
+            _handle_error(strict, f"NDJSON 解析失败: {exc}", filename=str(path), line_no=line_no)
+            continue
 
-    parser = argparse.ArgumentParser(description="解析 Winlogbeat NDJSON 示例。")
-    parser.add_argument("ndjson", nargs="?", default="sample_winlogbeat.ndjson")
-    parser.add_argument("--strict", action="store_true")
-    args = parser.parse_args()
+        event = record.get("event") or {}
+        winlog = record.get("winlog") or {}
+        system = winlog.get("system") or {}
+        event_data = winlog.get("event_data") or {}
 
-    events = extract_host_logs_from_winlogbeat_ndjson(args.ndjson, strict=args.strict)
-    print(json.dumps(events[:3], indent=2))
-    sessions = rebuild_logon_sessions(events, strict=False)
-    print(json.dumps({"session_count": len(sessions)}, indent=2))
+        raw_id = str(event.get("code") or system.get("eventID") or "")
+        if not raw_id:
+            _handle_error(strict, "缺少 raw_id(event.code)", filename=str(path), line_no=line_no)
+            continue
+
+        ts = record.get("@timestamp") or record.get("timestamp") or ""
+        event_dt = _parse_iso8601(ts, filename=str(path), line_no=line_no, strict=strict, raw_id=raw_id)
+        if event_dt is None:
+            continue
+
+        host_obj = record.get("host") or {}
+        host_name = host_obj.get("name")
+        host_ip = None
+        host_ips = host_obj.get("ip")
+        if isinstance(host_ips, list) and host_ips:
+            host_ip = host_ips[0]
+        elif isinstance(host_ips, str):
+            host_ip = host_ips
+
+        host_value = host_ip or host_name or "unknown"
+
+        normalized = _build_host_log_event(
+            raw_id=raw_id,
+            event_dt=event_dt,
+            ingest_dt=None,
+            host_ip=str(host_value),
+            event_data=event_data if isinstance(event_data, dict) else {},
+            record_context=record,
+            strict=strict,
+            record_ref=f"{path.name}:{line_no}",
+            clock_offset_ms=clock_offset_ms,
+            enable_time_alignment=enable_time_alignment,
+            delays_ms=None,
+        )
+        if normalized:
+            results.append(normalized)
+
+    return results

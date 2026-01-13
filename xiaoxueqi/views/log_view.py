@@ -1,4 +1,4 @@
-"""日志分析视图（SQL Server 版 HostLogs）"""
+"""日志分析视图（SQL Server 版 HostLogs + host_name 筛选）"""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from utils.winlog.service.hostlogs_ingest import ingest_windows_eventlog_to_sqls
 from utils.winlog.storage.hostlogs_sqlserver import (
     count_hostlogs,
     get_hostlog_by_id,
+    list_distinct_host_names,
     list_hostlogs,
     parse_result_json,
 )
@@ -113,23 +114,16 @@ def _ping_server(server: str) -> bool:
 
 
 def _map_row_to_log_item(row) -> dict:
-    """
-    将 dbo.HostLogs 的一行映射为页面需要的字段：
-    logs.html / log_detail.html 目前使用：
-    id, timestamp, hostname, level, event_id, message, raw_log
-    """
     event = parse_result_json(row.result)
     event_type = str(event.get("event_type") or "")
     return {
         "id": row.id,
         "timestamp": str(event.get("timestamp") or ""),
-        "hostname": str(event.get("host_ip") or ""),
+        "hostname": str(getattr(row, "host_name", None) or event.get("host_ip") or ""),
         "level": _level_from_event_type(event_type),
         "event_id": str(event.get("raw_id") or ""),
         "message": str(event.get("description") or ""),
-        # raw_log：详情页展示“完整日志”；此处优先用 content（更完整），否则用 result
         "raw_log": row.content or row.result or "",
-        # 额外给详情页使���（可选）
         "result_json_pretty": json.dumps(event, ensure_ascii=False, indent=2) if event else (row.result or ""),
     }
 
@@ -137,23 +131,32 @@ def _map_row_to_log_item(row) -> dict:
 @bp.route("/db", methods=["POST"])
 def set_db_server():
     raw_server = request.form.get("db_server", "")
+    host_name = (request.form.get("host_name") or "").strip()
     if not raw_server.strip():
         session.pop("db_server", None)
         flash("已恢复默认 SQL Server。", "info")
+        if host_name:
+            return redirect(url_for("logs.list_logs", host_name=host_name))
         return redirect(url_for("logs.list_logs"))
 
     normalized = _normalize_db_server(raw_server)
     if not normalized:
         flash("SQL Server 地址无效，请输入 IPv4 或 localhost。", "error")
+        if host_name:
+            return redirect(url_for("logs.list_logs", host_name=host_name))
         return redirect(url_for("logs.list_logs"))
 
     reachable = _ping_server(normalized)
     if not reachable:
         flash(f"无法连接到 SQL Server 主机：{normalized}", "error")
+        if host_name:
+            return redirect(url_for("logs.list_logs", host_name=host_name))
         return redirect(url_for("logs.list_logs"))
 
     session["db_server"] = normalized
     flash(f"SQL Server 已设置为：{normalized}", "info")
+    if host_name:
+        return redirect(url_for("logs.list_logs", host_name=host_name))
     return redirect(url_for("logs.list_logs"))
 
 
@@ -161,7 +164,7 @@ def set_db_server():
 def list_logs():
     page = request.args.get("page", 1, type=int)
     page = max(page, 1)
-
+    host_name = (request.args.get("host_name") or "").strip() or None
     db_server = _get_db_server()
     _ping_server(db_server)
     conn_str = _get_conn_str()
@@ -170,21 +173,37 @@ def list_logs():
     logs = []
     total = 0
     try:
-        rows = list_hostlogs(offset=offset, limit=PAGE_SIZE, conn_str=conn_str)
+        rows = list_hostlogs(
+            offset=offset,
+            limit=PAGE_SIZE,
+            host_name=host_name,
+            conn_str=conn_str,
+        )
         logs = [_map_row_to_log_item(r) for r in rows]
-        total = count_hostlogs(conn_str=conn_str)
+        total = count_hostlogs(host_name=host_name, conn_str=conn_str)
     except Exception as exc:
         _get_logger().warning("读取 HostLogs 失败: %s", exc)
         flash(f"读取 HostLogs 失败：{exc}", "error")
 
-    return render_template("logs.html", logs=logs, page=page, total=total, db_server=db_server)
+    host_names = []
+    try:
+        host_names = list_distinct_host_names(limit=200, conn_str=conn_str)
+    except Exception as exc:
+        _get_logger().warning("读取 host_name 下拉列表失败: %s", exc)
+
+    return render_template(
+        "logs.html",
+        logs=logs,
+        page=page,
+        total=total,
+        db_server=db_server,
+        host_name=host_name,
+        host_names=host_names,
+    )
 
 
 @bp.route("/collect", methods=["POST"])
 def collect():
-    """
-    点击按钮：扫描本机 Windows Event Log 并入库 dbo.HostLogs。
-    """
     log = _get_logger()
     db_server = _get_db_server()
     _ping_server(db_server)
@@ -204,6 +223,9 @@ def collect():
         log.exception("采集入库失败: %s", exc)
         flash(f"采集入库失败：{exc}", "error")
 
+    host_name = (request.args.get("host_name") or "").strip()
+    if host_name:
+        return redirect(url_for("logs.list_logs", host_name=host_name))
     return redirect(url_for("logs.list_logs"))
 
 
