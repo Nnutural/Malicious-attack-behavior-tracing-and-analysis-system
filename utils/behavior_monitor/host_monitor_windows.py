@@ -5,24 +5,35 @@ Windows 主机行为监控（Sysmon）：
 - 将 Sysmon XML 解析为标准 event dict（host_behavior）
 - run_forever: 持续监听并回调 on_event(event_dict, raw_xml)
 
-注意：本文件不再写 host_data.json（路线 A：直接回调入库）
+输出 schema（与你的新接口对齐）：
+{
+  data_source, timestamp, host_ip, event_type, action,
+  entities: {
+    process_name,pid,parent_process,parent_pid,command_line,
+    hash,user,file_path,listen_ports,
+    registry_key,registry_value_name,registry_value_data,
+    src_ip,src_port,dst_ip,dst_port,protocol
+  },
+  behavior_features: {is_abnormal_parent, has_memory_injection},
+  description
+}
 """
 
 from __future__ import annotations
 
-import os
-import re
-import sys
-import time
-import socket
 import datetime
 import hashlib
+import os
+import re
+import socket
+import sys
 import threading
+import time
 import xml.etree.ElementTree as ET
-from typing import Dict, Optional, Callable
+from typing import Callable, Dict, Optional
 
 try:
-    import win32evtlog
+    import win32evtlog  # type: ignore
 except ImportError:
     print("[!] Fatal Error: 'pywin32' library not found.")
     sys.exit(1)
@@ -48,6 +59,7 @@ class ActionType:
     ACCESS = "access"
     CONNECTION = "connection"
     INJECTION = "injection"
+    UNKNOWN = "unknown"
 
 
 class ForensicsUtils:
@@ -62,6 +74,7 @@ class ForensicsUtils:
     def get_timestamp_iso(raw_time_str=None) -> str:
         if raw_time_str:
             try:
+                # Sysmon UtcTime 常见：2026-01-13 12:34:56.123
                 return raw_time_str.replace(" ", "T") + "Z"
             except Exception:
                 pass
@@ -81,6 +94,32 @@ class ForensicsUtils:
             return sha256.hexdigest()
         except Exception:
             return None
+
+
+def _to_int_or_none(value) -> int | None:
+    try:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        return int(text)
+    except Exception:
+        return None
+
+
+def _split_registry_target(target: str) -> tuple[str | None, str | None]:
+    text = (target or "").strip()
+    if not text:
+        return None, None
+    if "\\" not in text:
+        return text, None
+    parts = text.split("\\")
+    if len(parts) <= 1:
+        return text, None
+    key = "\\".join(parts[:-1])
+    value_name = parts[-1] or None
+    return key or None, value_name
 
 
 class WindowsBehaviorEngine:
@@ -106,12 +145,6 @@ class WindowsBehaviorEngine:
                 if name:
                     data[name] = text if text else ""
 
-            # ComputerName（用于 host_name 也可用）
-            if sys_node is not None:
-                comp = sys_node.find("Computer")
-                if comp is not None and comp.text:
-                    data["_Computer"] = comp.text.strip()
-
         except Exception:
             pass
         return data
@@ -126,85 +159,127 @@ class WindowsBehaviorEngine:
         parent_path = raw_data.get("ParentImage", "") or ""
         parent_name = os.path.basename(parent_path)
 
+        entities = {
+            "process_name": process_name,
+            "pid": int(raw_data.get("ProcessId", 0) or 0),
+            "parent_process": parent_name,
+            "parent_pid": int(raw_data.get("ParentProcessId", 0) or 0),
+            "command_line": raw_data.get("CommandLine", "") or "",
+
+            # 新增字段（默认值）
+            "hash": None,
+            "user": raw_data.get("User", "") or raw_data.get("UserName", "") or None,
+            "file_path": None,
+            "listen_ports": [],
+
+            # registry
+            "registry_key": None,
+            "registry_value_name": None,
+            "registry_value_data": None,
+
+            # network
+            "src_ip": None,
+            "src_port": None,
+            "dst_ip": None,
+            "dst_port": None,
+            "protocol": None,
+        }
+
         alert = {
             "data_source": "host_behavior",
             "timestamp": ForensicsUtils.get_timestamp_iso(raw_data.get("UtcTime")),
             "host_ip": ForensicsUtils.get_host_ip(),
             "event_type": "unknown",
-            "action": "unknown",
-            "entities": {
-                "process_name": process_name,
-                "pid": int(raw_data.get("ProcessId", 0) or 0),
-                "parent_process": parent_name,
-                "parent_pid": int(raw_data.get("ParentProcessId", 0) or 0),
-                "command_line": raw_data.get("CommandLine", "") or "",
-                "file_hash": None,
-                "target_file": None,
-                "target_ip": None,
-                "registry_key": None,
-                "registry_value_name": None,
-                "registry_value_data": None,
-            },
+            "action": ActionType.UNKNOWN,
+            "entities": entities,
             "behavior_features": {"is_abnormal_parent": False, "has_memory_injection": False},
             "description": f"Sysmon Event {event_id}",
         }
 
         matched = False
 
+        # Sysmon 1: Process Create
         if event_id == 1:
             alert["event_type"] = EventType.PROCESS_CREATE
             alert["action"] = ActionType.EXECUTION
 
+            # hash：优先 Sysmon 提供的 SHA256
             hashes = raw_data.get("Hashes", "") or ""
             if "SHA256=" in hashes:
                 try:
-                    alert["entities"]["file_hash"] = hashes.split("SHA256=")[1].split(",")[0]
+                    entities["hash"] = hashes.split("SHA256=")[1].split(",")[0]
                 except Exception:
                     pass
 
+            entities["file_path"] = image_path or None
+
+            # 简单异常父子判定
             p_lower = parent_name.lower()
             c_lower = process_name.lower()
-            if ("python" in p_lower or "word" in p_lower) and ("cmd" in c_lower or "powershell" in c_lower):
+            if ("python" in p_lower or "word" in p_lower or "excel" in p_lower) and ("cmd" in c_lower or "powershell" in c_lower):
                 alert["behavior_features"]["is_abnormal_parent"] = True
                 alert["description"] = f"Suspicious spawn: {parent_name} -> {process_name}"
 
             matched = True
 
+        # Sysmon 3: Network Connect
         elif event_id == 3:
             alert["event_type"] = EventType.NETWORK_CONNECT
             alert["action"] = ActionType.CONNECTION
-            alert["entities"]["target_ip"] = raw_data.get("DestinationIp")
-            alert["description"] = f"Network connection to {alert['entities']['target_ip']}"
+
+            entities["src_ip"] = raw_data.get("SourceIp") or None
+            entities["src_port"] = _to_int_or_none(raw_data.get("SourcePort"))
+            entities["dst_ip"] = raw_data.get("DestinationIp") or None
+            entities["dst_port"] = _to_int_or_none(raw_data.get("DestinationPort"))
+            entities["protocol"] = raw_data.get("Protocol") or None
+
+            alert["description"] = f"Network connection to {entities['dst_ip']}:{entities['dst_port']}"
             matched = True
 
+        # Sysmon 11: File Create
         elif event_id == 11:
             target_file = raw_data.get("TargetFilename", "") or ""
             alert["event_type"] = EventType.FILE_CREATE
             alert["action"] = ActionType.MODIFICATION
-            alert["entities"]["target_file"] = target_file
-            alert["entities"]["file_hash"] = ForensicsUtils.calculate_sha256(target_file)
+
+            entities["file_path"] = target_file or None
+            entities["hash"] = ForensicsUtils.calculate_sha256(target_file)
+
             alert["description"] = f"File created: {target_file}"
             matched = True
 
+        # Sysmon 23: File Delete
+        elif event_id == 23:
+            target_file = raw_data.get("TargetFilename", "") or ""
+            alert["event_type"] = EventType.FILE_DELETE
+            alert["action"] = ActionType.DELETION
+
+            entities["file_path"] = target_file or None
+            alert["description"] = f"File deleted: {target_file}"
+            matched = True
+
+        # Sysmon 12/13/14: Registry Set
         elif event_id in [12, 13, 14]:
             alert["event_type"] = EventType.REGISTRY_SET
             alert["action"] = ActionType.MODIFICATION
-            alert["entities"]["registry_key"] = raw_data.get("TargetObject", "") or ""
+
+            target_obj = raw_data.get("TargetObject", "") or ""
             details = raw_data.get("Details", "") or ""
-            if details:
-                alert["entities"]["registry_value_data"] = details
+
+            key, value_name = _split_registry_target(target_obj)
+            entities["registry_key"] = key
+            entities["registry_value_name"] = value_name
+            entities["registry_value_data"] = details or None
+
+            alert["description"] = f"Registry set: {target_obj}"
             matched = True
 
+        # Sysmon 8: CreateRemoteThread (Injection)
         elif event_id == 8:
             alert["event_type"] = EventType.PROCESS_INJECTION
             alert["action"] = ActionType.INJECTION
             alert["behavior_features"]["has_memory_injection"] = True
-            matched = True
-
-        elif event_id == 23:
-            alert["event_type"] = EventType.FILE_DELETE
-            alert["action"] = ActionType.DELETION
-            alert["entities"]["target_file"] = raw_data.get("TargetFilename")
+            alert["description"] = "Process injection detected (Sysmon Event 8)"
             matched = True
 
         if matched:
@@ -231,7 +306,7 @@ def run_forever(
             except Exception:
                 pass
 
-    subscription = win32evtlog.EvtSubscribe(
+    _ = win32evtlog.EvtSubscribe(
         channel,
         win32evtlog.EvtSubscribeToFutureEvents,
         None,
@@ -241,6 +316,5 @@ def run_forever(
         None,
     )
 
-    # 保活，直到 stop_event 被 set
     while not stop_event.is_set():
         time.sleep(0.5)

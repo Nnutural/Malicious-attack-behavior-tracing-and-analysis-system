@@ -3,6 +3,8 @@
 - 自动判断 Windows/Linux
 - 调用对应 host_monitor_* 的 run_forever 采集事件
 - 将事件通过 HTTP POST 上报到服务器 /behavior/ingest 入库
+
+增强：对 process_create 事件补齐 entities.listen_ports（可选依赖 psutil）
 """
 
 from __future__ import annotations
@@ -51,6 +53,59 @@ def post_event(server: str, host_name: str, event: dict, raw: str | None) -> Non
         _ = resp.read()
 
 
+def _enrich_listen_ports(event: dict) -> None:
+    """
+    给 event['entities']['listen_ports'] 补齐监听端口快照。
+    - 仅对 event_type=process_create 尝试
+    - 未安装 psutil 或权限不足时保持 []
+    """
+    try:
+        if not isinstance(event, dict):
+            return
+        if event.get("event_type") != "process_create":
+            return
+        ent = event.get("entities")
+        if not isinstance(ent, dict):
+            return
+
+        pid = ent.get("pid")
+        if not isinstance(pid, int) or pid <= 0:
+            return
+
+        # 确保字段存在
+        if "listen_ports" not in ent or not isinstance(ent.get("listen_ports"), list):
+            ent["listen_ports"] = []
+
+        try:
+            import psutil  # type: ignore
+        except Exception:
+            return
+
+        ports: set[int] = set()
+        for c in psutil.net_connections(kind="inet"):
+            if c.pid != pid:
+                continue
+            if getattr(c, "status", None) != psutil.CONN_LISTEN:
+                continue
+            laddr = getattr(c, "laddr", None)
+            if not laddr:
+                continue
+            port = None
+            try:
+                port = int(laddr.port)  # type: ignore[attr-defined]
+            except Exception:
+                try:
+                    port = int(laddr[1])  # type: ignore[index]
+                except Exception:
+                    port = None
+            if port is not None and 0 < port < 65536:
+                ports.add(port)
+
+        ent["listen_ports"] = sorted(ports)
+    except Exception:
+        return
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--server", required=True, help="服务器地址，例如 http://10.21.226.213:5000")
@@ -66,21 +121,43 @@ def main():
 
     def safe_post(ev: dict, raw: str | None):
         try:
+            _enrich_listen_ports(ev)
             post_event(args.server, host_name, ev, raw)
             if args.verbose:
-                print(f"[agent] posted event_type={ev.get('event_type')} host_name={host_name}")
+                ent = ev.get("entities") or {}
+                print(
+                    f"[agent] posted event_type={ev.get('event_type')} host_name={host_name} "
+                    f"pid={ent.get('pid')} listen_ports={ent.get('listen_ports')}"
+                )
         except Exception as e:
             if args.verbose:
                 print(f"[agent] post_event failed: {e}")
 
-    # 启动心跳：让服务器一定能看到该主机（即使 Falco 暂无事件）
     startup_event = {
         "data_source": "host_behavior",
         "timestamp": _utc_now_z(),
-        "host_ip": host_name,  # 这里不强求 IP，先占位；host_name 由 payload.host_name 决定
+        "host_ip": host_name,
         "event_type": "agent_startup",
         "action": "heartbeat",
-        "entities": {"process_name": "client_agent", "pid": 0, "parent_pid": 0, "command_line": ""},
+        "entities": {
+            "process_name": "client_agent",
+            "pid": 0,
+            "parent_process": None,
+            "parent_pid": 0,
+            "command_line": "",
+            "hash": None,
+            "user": None,
+            "file_path": None,
+            "listen_ports": [],
+            "registry_key": None,
+            "registry_value_name": None,
+            "registry_value_data": None,
+            "src_ip": None,
+            "src_port": None,
+            "dst_ip": None,
+            "dst_port": None,
+            "protocol": None,
+        },
         "behavior_features": {"is_abnormal_parent": False, "has_memory_injection": False},
         "description": f"agent startup ({os_name})",
     }

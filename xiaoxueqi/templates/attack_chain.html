@@ -2,64 +2,267 @@
 
 {% block title %}攻击链分析 - 攻击溯源分析系统{% endblock %}
 
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='traceback/traceback.css') }}">
+<style>
+  .pre-dark { color:#111; background:#f7f7f7; padding:10px; border-radius:12px; overflow:auto; }
+</style>
+{% endblock %}
+
 {% block content %}
-<section class="page-head">
-  <h2>攻击链分析</h2>
-  <p class="muted">后续将事件映射到 ATT&CK 阶段并形成攻击链时间线。</p>
-</section>
+<div class="tb-page">
+  <div class="tb-header">
+    <div>
+      <h2>攻击链分析</h2>
+      <div class="tb-subtitle">AttackReports（SQL Server）+ Neo4j（AttackEvent/Technique/NEXT_STAGE）联合展示</div>
+    </div>
 
-<section class="grid">
-  <div class="card">
-    <h3>ATT&CK 框架映射（占位）</h3>
-    <div class="placeholder">ATT&CK Map Placeholder</div>
+    <div class="tb-toolbar">
+      <button class="btn btn-secondary" id="btnRefresh">刷新列表</button>
+      <button class="btn btn-primary" id="btnStart">启动分析引擎</button>
+      <button class="btn" id="btnStop">停止分析引擎</button>
+      <span class="tb-status" id="status"></span>
+    </div>
   </div>
-  <div class="card">
-    <h3>攻击时间线（占位）</h3>
-    <div class="placeholder">Attack Timeline Placeholder</div>
-  </div>
-</section>
 
-<section class="card">
-  <h3>检测到的攻击技术（示例）</h3>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>技术ID</th>
-          <th>技术名称</th>
-          <th>战术</th>
-          <th>检测次数</th>
-          <th>最后检测时间</th>
-          <th>严重程度</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>T1078</td>
-          <td>Valid Accounts</td>
-          <td>Initial Access</td>
-          <td>3</td>
-          <td>2026-01-12 10:30:00</td>
-          <td><span class="badge danger">高</span></td>
-        </tr>
-        <tr>
-          <td>T1059</td>
-          <td>Command and Scripting Interpreter</td>
-          <td>Execution</td>
-          <td>5</td>
-          <td>2026-01-12 10:35:00</td>
-          <td><span class="badge warn">中</span></td>
-        </tr>
-        <tr>
-          <td>T1021</td>
-          <td>Remote Services</td>
-          <td>Lateral Movement</td>
-          <td>2</td>
-          <td>2026-01-12 10:40:00</td>
-          <td><span class="badge danger">高</span></td>
-        </tr>
-      </tbody>
-    </table>
+  <div class="tb-layout">
+    <aside class="tb-left">
+      <div class="panel">
+        <div class="panel-title">AttackReports 列表</div>
+
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom: 10px;">
+          <input id="fltIP" placeholder="victim_ip（可选）" style="padding:8px 10px; border:1px solid #ddd; border-radius:10px; width: 100%;">
+          <select id="fltConf" style="padding:8px 10px; border:1px solid #ddd; border-radius:10px; width: 100%;">
+            <option value="">全部 confidence</option>
+            <option value="High">High</option>
+            <option value="Medium">Medium</option>
+            <option value="Low">Low</option>
+          </select>
+          <button class="btn" id="btnApply">筛选</button>
+        </div>
+
+        <div id="reportsList" class="alert-list">
+          <div class="muted">点击“刷新列表”。</div>
+        </div>
+
+        <div class="muted" style="margin-top:10px;">
+          <button class="btn" id="btnPrev">上一页</button>
+          <button class="btn" id="btnNext">下一页</button>
+          <span id="pageInfo"></span>
+        </div>
+      </div>
+    </aside>
+
+    <main class="tb-right">
+      <div class="panel">
+        <div class="tabs">
+          <button class="tab active" data-tab="summary">ATT&CK 攻击链</button>
+          <button class="tab" data-tab="topology">实体拓扑</button>
+          <button class="tab" data-tab="report">报告 JSON</button>
+        </div>
+
+        <section class="tab-content active" id="tab-summary">
+          <div class="graph-legend-row">
+            <div class="legend-item"><span class="dot dot-tech"></span>Technique</div>
+          </div>
+          <div id="graphSummary" class="graph"></div>
+          <div class="graph-detail">
+            <div class="panel-title">详情</div>
+            <pre id="detailSummary" class="pre-dark">{}</pre>
+          </div>
+        </section>
+
+        <section class="tab-content" id="tab-topology">
+          <div class="graph-legend-row">
+            <div class="legend-item"><span class="dot dot-proc"></span>Process</div>
+            <div class="legend-item"><span class="dot dot-file"></span>File</div>
+            <div class="legend-item"><span class="dot dot-ip"></span>IP</div>
+            <div class="legend-item"><span class="dot dot-domain"></span>Domain</div>
+            <div class="legend-item"><span class="dot dot-user"></span>User</div>
+          </div>
+          <div id="graphTopo" class="graph"></div>
+          <div class="graph-detail">
+            <div class="panel-title">详情</div>
+            <pre id="detailTopo" class="pre-dark">{}</pre>
+          </div>
+        </section>
+
+        <section class="tab-content" id="tab-report">
+          <div class="panel-title">report_json</div>
+          <pre id="rawReport" class="pre-dark">{}</pre>
+        </section>
+      </div>
+    </main>
   </div>
-</section>
+</div>
+
+<script>
+  window.__ATTACK_API__ = {
+    reports: "{{ url_for('attack.api_reports') }}",
+    report: "{{ url_for('attack.api_report_detail', scenario_id='__SID__') }}",
+    summary: "{{ url_for('attack.api_graph_summary', scenario_id='__SID__') }}",
+    topology: "{{ url_for('attack.api_graph_topology', scenario_id='__SID__') }}",
+    status: "{{ url_for('attack.api_system_status') }}",
+    start: "{{ url_for('attack.api_system_start') }}",
+    stop: "{{ url_for('attack.api_system_stop') }}"
+  };
+</script>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<script>
+/* global vis */
+let page = 1;
+let limit = 10;
+let total = 0;
+let selectedScenario = "";
+
+function $(id){ return document.getElementById(id); }
+function setStatus(t){ $("status").textContent = t || ""; }
+
+function apiUrl(tpl, sid){ return tpl.replace("__SID__", encodeURIComponent(sid)); }
+
+function setActiveTab(tab){
+  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+  document.querySelectorAll(".tab-content").forEach(x=>x.classList.remove("active"));
+  document.querySelector(`.tab[data-tab="${tab}"]`).classList.add("active");
+  document.querySelector(`#tab-${tab}`).classList.add("active");
+}
+document.querySelectorAll(".tab").forEach(btn=>{
+  btn.addEventListener("click", ()=>setActiveTab(btn.getAttribute("data-tab")));
+});
+
+async function refreshList(){
+  const ip = $("fltIP").value.trim();
+  const conf = $("fltConf").value.trim();
+  const qs = new URLSearchParams({page:String(page), limit:String(limit)});
+  if (ip) qs.set("ip", ip);
+  if (conf) qs.set("confidence", conf);
+
+  setStatus("加载 AttackReports...");
+  const resp = await fetch(window.__ATTACK_API__.reports + "?" + qs.toString());
+  const data = await resp.json();
+  if (!data.ok){
+    setStatus("加载失败");
+    return;
+  }
+  total = data.total || 0;
+  $("pageInfo").textContent = `page=${page}, total=${total}`;
+  renderList(data.data || []);
+  setStatus("列表已更新");
+}
+
+function renderList(rows){
+  const box = $("reportsList");
+  if (!rows.length){
+    box.innerHTML = `<div class="muted">暂无数据（请启动分析引擎或检查 dbo.AttackReports）</div>`;
+    return;
+  }
+  box.innerHTML = rows.map(r=>{
+    const sid = r.scenario_id || "";
+    const active = sid === selectedScenario ? "active" : "";
+    const t = (r.start_time || r.created_at || "").toString().slice(0,19);
+    return `
+      <div class="alert-card ${active}" data-sid="${sid}">
+        <div class="alert-top">
+          <span class="badge badge-high">${r.confidence || "?"}</span>
+          <span class="alert-time">${t}</span>
+        </div>
+        <div class="alert-main"><b>${r.victim_ip || ""}</b></div>
+        <div class="alert-sub">${r.attribution_name || ""}</div>
+        <div class="muted" style="margin-top:4px;">scenario_id=${sid}</div>
+      </div>
+    `;
+  }).join("");
+
+  box.querySelectorAll(".alert-card").forEach(el=>{
+    el.addEventListener("click", ()=>{
+      selectedScenario = el.getAttribute("data-sid");
+      refreshList();
+      loadScenario(selectedScenario);
+    });
+  });
+
+  if (!selectedScenario && rows[0]?.scenario_id){
+    selectedScenario = rows[0].scenario_id;
+    loadScenario(selectedScenario);
+  }
+}
+
+async function loadScenario(sid){
+  if (!sid) return;
+  setStatus("加载图谱与报告...");
+
+  // report
+  const rResp = await fetch(apiUrl(window.__ATTACK_API__.report, sid));
+  const rData = await rResp.json();
+  if (rData.ok){
+    $("rawReport").textContent = JSON.stringify(rData.report || {}, null, 2);
+  } else {
+    $("rawReport").textContent = JSON.stringify(rData, null, 2);
+  }
+
+  await loadGraph("summary", sid);
+  await loadGraph("topology", sid);
+
+  setStatus("完成");
+}
+
+async function loadGraph(kind, sid){
+  const container = kind === "summary" ? $("graphSummary") : $("graphTopo");
+  const detail = kind === "summary" ? $("detailSummary") : $("detailTopo");
+  detail.textContent = "{}";
+  container.innerHTML = "";
+
+  const url = kind === "summary"
+    ? apiUrl(window.__ATTACK_API__.summary, sid)
+    : apiUrl(window.__ATTACK_API__.topology, sid);
+
+  const resp = await fetch(url);
+  const data = await resp.json();
+  if (!data.ok){
+    container.innerHTML = `<div class="muted" style="padding:12px;">无图数据：${data.error || "unknown"}</div>`;
+    return;
+  }
+  const nodes = new vis.DataSet(data.data.nodes || []);
+  const edges = new vis.DataSet(data.data.edges || []);
+
+  const net = new vis.Network(container, {nodes, edges}, {
+    interaction: { hover: true },
+    physics: { stabilization: { iterations: 120 }, solver: "forceAtlas2Based" },
+    nodes: { shape: "dot", size: 14, font: { size: 14 } },
+    edges: { arrows: { to: { enabled: true, scaleFactor: 0.7 } }, font: { align: "middle" } }
+  });
+
+  net.once("stabilizationIterationsDone", () => net.setOptions({physics:false}));
+  net.on("click", (params)=>{
+    if (params.nodes?.length) detail.textContent = JSON.stringify(nodes.get(params.nodes[0]), null, 2);
+    else if (params.edges?.length) detail.textContent = JSON.stringify(edges.get(params.edges[0]), null, 2);
+  });
+}
+
+async function startEngine(){
+  setStatus("启动中...");
+  const resp = await fetch(window.__ATTACK_API__.start, {method:"POST"});
+  const data = await resp.json();
+  setStatus(data.message || "started");
+}
+async function stopEngine(){
+  setStatus("停止中...");
+  const resp = await fetch(window.__ATTACK_API__.stop, {method:"POST"});
+  const data = await resp.json();
+  setStatus(data.message || "stopped");
+}
+
+$("btnRefresh").addEventListener("click", ()=>{ selectedScenario=""; refreshList(); });
+$("btnApply").addEventListener("click", ()=>{ page=1; selectedScenario=""; refreshList(); });
+$("btnPrev").addEventListener("click", ()=>{ page=Math.max(1,page-1); refreshList(); });
+$("btnNext").addEventListener("click", ()=>{ page=page+1; refreshList(); });
+
+$("btnStart").addEventListener("click", startEngine);
+$("btnStop").addEventListener("click", stopEngine);
+
+refreshList();
+</script>
 {% endblock %}

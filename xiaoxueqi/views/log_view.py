@@ -169,10 +169,16 @@ def list_logs():
     _ping_server(db_server)
     conn_str = _get_conn_str()
 
-    offset = (page - 1) * PAGE_SIZE
     logs = []
     total = 0
+    total_pages = 1
     try:
+        total = count_hostlogs(host_name=host_name, conn_str=conn_str)
+        total_pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
+        if page > total_pages:
+            page = total_pages
+
+        offset = (page - 1) * PAGE_SIZE
         rows = list_hostlogs(
             offset=offset,
             limit=PAGE_SIZE,
@@ -180,7 +186,6 @@ def list_logs():
             conn_str=conn_str,
         )
         logs = [_map_row_to_log_item(r) for r in rows]
-        total = count_hostlogs(host_name=host_name, conn_str=conn_str)
     except Exception as exc:
         _get_logger().warning("读取 HostLogs 失败: %s", exc)
         flash(f"读取 HostLogs 失败：{exc}", "error")
@@ -196,6 +201,7 @@ def list_logs():
         logs=logs,
         page=page,
         total=total,
+        total_pages=total_pages,
         db_server=db_server,
         host_name=host_name,
         host_names=host_names,

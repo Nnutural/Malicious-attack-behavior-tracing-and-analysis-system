@@ -2,61 +2,139 @@
 
 {% block title %}溯源分析 - 攻击溯源分析系统{% endblock %}
 
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='traceback/traceback.css') }}">
+{% endblock %}
+
 {% block content %}
-<section class="page-head">
-  <h2>攻击溯源分析</h2>
-  <p class="muted">后续接入攻击路径重建、攻击者画像、C2 分析与归因结果。</p>
-</section>
+<div class="tb-page">
+  <!-- 顶部 -->
+  <div class="tb-header">
+    <div>
+      <h2>溯源分析</h2>
+      <div class="tb-subtitle">
+        面向 High 告警的攻击路径重建：入口 → 横向 → 提权/持久化 → 外传 → C2/归因
+      </div>
+    </div>
 
-<section class="grid">
-  <div class="card">
-    <h3>攻击路径重建（占位）</h3>
-    <div class="placeholder">Attack Path Placeholder</div>
-  </div>
-  <div class="card">
-    <h3>攻击者画像（占位）</h3>
-    <div class="placeholder">Attacker Profile Placeholder</div>
-  </div>
-</section>
+    <div class="tb-toolbar">
+      <button class="btn btn-secondary" id="btnRefresh">刷新列表</button>
+      <button class="btn btn-primary" id="btnAnalyze">运行分析</button>
 
-<section class="grid">
-  <div class="card">
-    <h3>C2 基础设施分析（示例）</h3>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>C2 服务器IP</th>
-            <th>连接次数</th>
-            <th>威胁等级</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>45.67.89.123</td>
-            <td>156</td>
-            <td><span class="badge danger">高</span></td>
-          </tr>
-          <tr>
-            <td>23.45.67.89</td>
-            <td>89</td>
-            <td><span class="badge warn">中</span></td>
-          </tr>
-        </tbody>
-      </table>
+      <label class="switch">
+        <input type="checkbox" id="chkMock" checked>
+        <span>Mock 模式</span>
+      </label>
+
+      <label class="switch">
+        <input type="checkbox" id="chkCache" checked>
+        <span>使用缓存</span>
+      </label>
+
+      <span class="tb-status" id="status"></span>
     </div>
   </div>
 
-  <div class="card">
-    <h3>APT 组织归因（示例）</h3>
-    <p><strong>最可能的 APT：</strong> APT29</p>
-    <p class="muted">相似度：72%</p>
-    <div class="progress">
-      <div class="progress-bar" style="width: 72%;">72%</div>
-    </div>
-    <p style="margin-top:10px;" class="muted">
-      常用技术：T1078, T1059, T1021
-    </p>
+  <!-- 主体：左侧固定 + 右侧固定 -->
+  <div class="tb-layout">
+    <!-- 左侧：High 告警 -->
+    <aside class="tb-left">
+      <div class="panel">
+        <div class="panel-title">High 告警</div>
+        <div id="alertsList" class="alert-list">
+          <div class="muted">点击“运行分析”生成告警与溯源报告。</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 右侧：概览 + Tabs -->
+    <main class="tb-right">
+      <div class="panel">
+        <div class="panel-title">溯源概览</div>
+
+        <div id="summaryEmpty" class="muted">请选择一个告警。</div>
+
+        <div id="summaryContent" style="display:none;">
+          <div class="summary-grid">
+            <div class="card">
+              <div class="card-title">入口（Initial Access）</div>
+              <div class="card-body" id="entryBody"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">执行（Execution / Process Tree）</div>
+              <div class="card-body" id="execBody"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">横向移动（Lateral Movement）</div>
+              <div class="card-body" id="lateralBody"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">外传（Exfiltration）</div>
+              <div class="card-body" id="exfilBody"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="tabs">
+          <button class="tab active" data-tab="graph">攻击图谱</button>
+          <button class="tab" data-tab="timeline">时间线</button>
+          <button class="tab" data-tab="ioc">IOC / 情报 / 归因</button>
+          <button class="tab" data-tab="raw">原始 JSON</button>
+        </div>
+
+        <!-- 图谱 TAB：图例横排放图上方；详情放图下方 -->
+        <section class="tab-content active" id="tab-graph">
+          <div class="graph-legend-row">
+            <div class="legend-item"><span class="dot dot-attack"></span>AttackEvent</div>
+            <div class="legend-item"><span class="dot dot-tech"></span>Technique</div>
+            <div class="legend-item"><span class="dot dot-proc"></span>Process</div>
+            <div class="legend-item"><span class="dot dot-file"></span>File</div>
+            <div class="legend-item"><span class="dot dot-user"></span>User</div>
+            <div class="legend-item"><span class="dot dot-ip"></span>IP</div>
+            <div class="legend-item"><span class="dot dot-domain"></span>Domain</div>
+          </div>
+
+          <div id="graph" class="graph"></div>
+
+          <div class="graph-detail">
+            <div class="panel-title">详情（点击节点/边）</div>
+            <pre id="graphDetail">{}</pre>
+          </div>
+        </section>
+
+        <section class="tab-content" id="tab-timeline">
+          <div id="timelineBox" class="muted">暂无时间线。</div>
+          <div class="panel-title" style="margin-top:12px;">事件详情</div>
+          <pre id="timelineDetail">{}</pre>
+        </section>
+
+        <section class="tab-content" id="tab-ioc">
+          <div id="iocBox" class="muted">暂无 IOC。</div>
+        </section>
+
+        <section class="tab-content" id="tab-raw">
+          <pre id="rawJson">{}</pre>
+        </section>
+      </div>
+    </main>
   </div>
-</section>
+</div>
+
+<!-- 给 JS 提供 API 地址 -->
+<script>
+  window.__TRACEBACK_API__ = {
+    analyze: "{{ url_for('traceback.api_analyze') }}",
+    high_alerts: "{{ url_for('traceback.api_high_alerts') }}"
+  };
+</script>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<script src="{{ url_for('static', filename='traceback/traceback.js') }}"></script>
 {% endblock %}

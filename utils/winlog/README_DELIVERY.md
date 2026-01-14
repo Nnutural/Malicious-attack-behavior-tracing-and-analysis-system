@@ -27,20 +27,20 @@ python -c "from utils.winlog import extract_host_logs_from_windows_eventlog as f
 python -c "from utils.winlog import extract_host_logs_from_winlogbeat_ndjson as f; print(f('sample_winlogbeat.ndjson', strict=False)[:3])"
 ```
 
-#### 功能实现
-时间序列对齐
+## 功能实现
+### 时间序列对齐 统一不同主机和设备的时钟源,确保事  件时间准确性
 实现位置：parser_winlogbeat.py
 逻辑：
 事件时间以 system_time_utc（系统采集）或 @timestamp（NDJSON）为事件发生时间；统一转为 UTC ISO8601（Z 结尾）。
 支持 clock_offset_ms 进行固定偏移修正。
 可选记录采集延迟（_ingest_delay_ms），但不改变事件语义时间。
-日志范式解析
+### 日志范式解析 将不同格式的日志转换为统一范式
 实现位置：parser_winlogbeat.py
 逻辑：
 统一输出结构：data_source/timestamp/host_ip/event_type/raw_id/entities/description
 事件 ID → 归一化事件类型映射表（唯一真值来源）：
 4624→user_logon，4634/4647→user_logoff，4625→user_logon_failed，4688→process_creation_log，7045/4697→service_install，4720→account_created，4728/4732/4756→group_membership_add，1102→log_clear
-关键信息提取（用户/进程/文件/注册表）
+### 关键信息提取（用户/进程/文件/注册表）识  别日志中的关键实体(用户、进程、文件、注册表键值)
 实现位置：parser_winlogbeat.py 的实体抽取逻辑
 逻辑：
 用户：从 user.name 提取
@@ -50,7 +50,7 @@ python -c "from utils.winlog import extract_host_logs_from_winlogbeat_ndjson as 
 服务（7045/4697）：ServiceName/ImagePath
 目前文件/注册表键值没有独立事件映射（Windows 需要开启对象访问审计/特定事件 ID 才能提供），因此只有当事件数据里存在相关字段时才会被带出。
 缺失关键字段会记录 warning，但不会阻断输出。
-登录会话重建
+### 登录会话重建 通过登录/注销  事件重建用户会话时间线和源 IP
 实现位置：session_rebuild.py
 逻辑：
 使用 (host_ip, session_id) 聚合

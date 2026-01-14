@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Linux 主机行为监控：
-- 读取 Falco JSON 日志（默认 /var/log/falco_events.json）
-- analyze_event: 将一行 falco JSON 转为标准 event dict（host_behavior）
-- run_forever: tail-f 监听，解析出 event 后回调 on_event(event, raw_line)
+HostGuard Linux Engine (Full Visibility Edition) - schema v2
 
-改进：
-- 新增 read_last_lines 参数：启动时先回放最后 N 行（默认 200），避免“启动后一直等不到新行”。
+从 Falco JSON line 生成与你的新接口对齐的 event dict（存入 HostBehaviors.result）：
+- entities 新字段：hash/user/file_path/listen_ports
+- network 字段：src_ip/src_port/dst_ip/dst_port/protocol
+- registry 字段 Linux 先留空（除非后续接 auditd）
 """
 
 import json
@@ -23,23 +22,24 @@ LOG_FILE_PATH = "/var/log/falco_events.json"
 
 
 class EventType:
-    PROCESS_INJECTION = "process_injection"
+    PROCESS_CREATE = "process_create"
     FILE_CREATE = "file_create"
     FILE_MODIFY = "file_modify"
     FILE_DELETE = "file_delete"
     FILE_READ = "file_read"
+    PROCESS_INJECTION = "process_injection"
     NETWORK_CONNECT = "network_connection"
-    PROCESS_CREATE = "process_create"
-    REGISTRY_SET = "registry_set_value"
+    SYSTEM_CALL = "system_call"
 
 
 class ActionType:
-    INJECTION = "injection"
+    EXECUTION = "execution"
     MODIFICATION = "modification"
     DELETION = "deletion"
     ACCESS = "access"
     CONNECTION = "connection"
-    EXECUTION = "execution"
+    INJECTION = "injection"
+    UNKNOWN = "unknown"
 
 
 class ForensicsUtils:
@@ -59,19 +59,17 @@ class ForensicsUtils:
         return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     @staticmethod
-    def calculate_sha256(filepath: str) -> str:
-        if not filepath or not os.path.exists(filepath):
-            return "unknown_or_deleted"
-        if not os.path.isfile(filepath):
-            return "not_a_regular_file"
+    def calculate_sha256(filepath: str) -> Optional[str]:
+        if not filepath or not os.path.isfile(filepath):
+            return None
         try:
-            sha256_hash = hashlib.sha256()
+            sha256 = hashlib.sha256()
             with open(filepath, "rb") as f:
-                for byte_block in iter(lambda: f.read(4096), b""):
-                    sha256_hash.update(byte_block)
-            return sha256_hash.hexdigest()
+                for block in iter(lambda: f.read(4096), b""):
+                    sha256.update(block)
+            return sha256.hexdigest()
         except Exception:
-            return "access_denied"
+            return None
 
     @staticmethod
     def strip_sudo(proc_name: str, cmd_line: str) -> str:
@@ -81,6 +79,18 @@ class ForensicsUtils:
                 if not part.startswith("-") and "=" not in part:
                     return os.path.basename(part)
         return proc_name
+
+
+def _to_int_or_none(value) -> int | None:
+    try:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        return int(text)
+    except Exception:
+        return None
 
 
 class HostBehaviorEngine:
@@ -93,7 +103,7 @@ class HostBehaviorEngine:
         now = time.time()
         with self._lock:
             last_time = self._dedup_cache.get(sig, 0)
-            if now - last_time < 1.5:
+            if now - last_time < 0.5:
                 return True
             self._dedup_cache[sig] = now
             return False
@@ -101,8 +111,9 @@ class HostBehaviorEngine:
     def analyze_event(self, line: str) -> Optional[Dict]:
         try:
             raw = json.loads(line)
-            output = raw.get("output", "")
+            output = raw.get("output", "") or ""
             fields = raw.get("output_fields", {}) or {}
+            rule = raw.get("rule", "") or ""
 
             cmd = str(fields.get("proc.cmdline", "") or "")
             proc = str(fields.get("proc.name", "") or "")
@@ -114,89 +125,98 @@ class HostBehaviorEngine:
                 proc = cmd.split()[0]
             proc = ForensicsUtils.strip_sudo(proc, cmd)
 
+            user = fields.get("user.name") or fields.get("user") or None
+            fd_name = fields.get("fd.name") or None
+
+            src_ip = fields.get("fd.sip") or fields.get("fd.cip") or None
+            dst_ip = fields.get("fd.dip") or None
+            src_port = _to_int_or_none(fields.get("fd.sport"))
+            dst_port = _to_int_or_none(fields.get("fd.dport"))
+            proto = fields.get("fd.l4proto") or None
+
+            entities = {
+                "process_name": proc,
+                "pid": pid,
+                "parent_process": "unknown",
+                "parent_pid": ppid,
+                "command_line": cmd,
+
+                # 新增字段
+                "hash": None,
+                "user": user,
+                "file_path": None,
+                "listen_ports": [],
+
+                # registry（Linux 暂不实现）
+                "registry_key": None,
+                "registry_value_name": None,
+                "registry_value_data": None,
+
+                # network
+                "src_ip": src_ip,
+                "src_port": src_port,
+                "dst_ip": dst_ip,
+                "dst_port": dst_port,
+                "protocol": proto,
+            }
+
             alert = {
                 "data_source": "host_behavior",
                 "timestamp": ForensicsUtils.get_timestamp(),
                 "host_ip": ForensicsUtils.get_host_ip(),
                 "event_type": "unknown",
-                "action": "unknown",
-                "entities": {
-                    "process_name": proc,
-                    "pid": pid,
-                    "parent_process": "unknown",
-                    "parent_pid": ppid,
-                    "command_line": cmd,
-                    "registry_key": None,
-                    "registry_value_name": None,
-                    "registry_value_data": None,
-                    "file_hash": None,
-                    "target_file": None,
-                    "target_ip": None,
-                },
+                "action": ActionType.UNKNOWN,
+                "entities": entities,
                 "behavior_features": {"is_abnormal_parent": False, "has_memory_injection": False},
                 "description": output,
             }
 
-            target_file = ""
+            lower_rule = rule.lower()
+            lower_out = output.lower()
 
-            if "PTRACE" in output or "strace" in cmd:
+            # 1) 注入
+            if "process_injection" in lower_rule or "ptrace" in lower_out:
                 alert["event_type"] = EventType.PROCESS_INJECTION
                 alert["action"] = ActionType.INJECTION
                 alert["behavior_features"]["has_memory_injection"] = True
 
-            elif "Network" in output or any(x in cmd for x in ["nc ", "ncat ", "curl ", "wget "]):
+            # 2) 网络
+            elif "network" in lower_rule or "network" in output or "connection" in lower_out:
                 alert["event_type"] = EventType.NETWORK_CONNECT
                 alert["action"] = ActionType.CONNECTION
-                ip_match = re.search(r"(\d{1,3}(\.\d{1,3}){3})", cmd)
-                if ip_match:
-                    alert["entities"]["target_ip"] = ip_match.group(1)
 
-            elif "File deletion" in output or "rm " in cmd:
-                alert["event_type"] = EventType.FILE_DELETE
-                alert["action"] = ActionType.DELETION
-                alert["entities"]["target_file"] = cmd.split()[-1] if cmd else None
+                # 兜底从 cmd 抓 ip
+                if not entities["dst_ip"]:
+                    ip_match = re.search(r"(\d{1,3}(\.\d{1,3}){3})", cmd)
+                    if ip_match:
+                        entities["dst_ip"] = ip_match.group(1)
 
-            elif "File creation" in output or "touch " in cmd:
-                alert["event_type"] = EventType.FILE_CREATE
-                alert["action"] = ActionType.MODIFICATION
-                target_file = cmd.split()[-1] if cmd else ""
-                alert["entities"]["target_file"] = target_file or None
-                alert["entities"]["file_hash"] = ForensicsUtils.calculate_sha256(target_file)
+            # 3) 文件
+            elif "file" in lower_rule:
+                file_path = fd_name or (cmd.split()[-1] if cmd else None)
+                entities["file_path"] = file_path
 
-            elif "File modification" in output or "chmod" in cmd or ">>" in cmd or " tee " in cmd or " > " in cmd:
-                alert["event_type"] = EventType.FILE_MODIFY
-                alert["action"] = ActionType.MODIFICATION
-                if ">>" in cmd:
-                    target_file = cmd.split(">>")[1].strip()
-                elif ">" in cmd:
-                    target_file = cmd.split(">")[1].strip()
-                elif "chmod" in cmd:
-                    target_file = cmd.split()[-1]
-                alert["entities"]["target_file"] = target_file or None
-                alert["entities"]["file_hash"] = ForensicsUtils.calculate_sha256(target_file)
+                if "creation" in lower_out or "create" in lower_rule:
+                    alert["event_type"] = EventType.FILE_CREATE
+                    alert["action"] = ActionType.MODIFICATION
+                elif "delete" in lower_out or "remove" in lower_rule or "rm " in cmd:
+                    alert["event_type"] = EventType.FILE_DELETE
+                    alert["action"] = ActionType.DELETION
+                elif "read" in lower_out or "access" in lower_rule:
+                    alert["event_type"] = EventType.FILE_READ
+                    alert["action"] = ActionType.ACCESS
+                else:
+                    alert["event_type"] = EventType.FILE_MODIFY
+                    alert["action"] = ActionType.MODIFICATION
 
-            elif "Sensitive" in output or "shadow" in cmd or "unix_chkpwd" in proc:
-                alert["event_type"] = EventType.FILE_READ
-                alert["action"] = ActionType.ACCESS
-                alert["entities"]["target_file"] = "/etc/shadow"
+                entities["hash"] = ForensicsUtils.calculate_sha256(file_path) if file_path else None
 
-            elif "Python" in output or "Abnormal shell" in output:
+            # 4) 兜底：进程启动
+            else:
                 alert["event_type"] = EventType.PROCESS_CREATE
                 alert["action"] = ActionType.EXECUTION
-                alert["behavior_features"]["is_abnormal_parent"] = True
-                exe_path = cmd.split()[0] if cmd else ""
-                if exe_path and os.path.exists(exe_path):
-                    alert["entities"]["file_hash"] = ForensicsUtils.calculate_sha256(exe_path)
-
-            elif "Registry" in output:
-                alert["event_type"] = EventType.REGISTRY_SET
-                alert["action"] = ActionType.MODIFICATION
-                alert["entities"]["registry_key"] = r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\EvilExe"
-                alert["entities"]["registry_value_name"] = "EvilExe"
-                alert["entities"]["registry_value_data"] = r"C:\Windows\Temp\trojan.exe"
-
-            else:
-                return None
+                if "python" in cmd and ("sh" in cmd or "bash" in cmd):
+                    alert["behavior_features"]["is_abnormal_parent"] = True
 
             if self._is_duplicate(alert):
                 return None
@@ -206,60 +226,24 @@ class HostBehaviorEngine:
             return None
 
 
-def _read_last_lines(path: str, n: int) -> list[str]:
-    if n <= 0:
-        return []
-    try:
-        with open(path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            size = f.tell()
-            block = 4096
-            data = b""
-            while size > 0 and data.count(b"\n") <= n:
-                step = block if size >= block else size
-                f.seek(-step, os.SEEK_CUR)
-                data = f.read(step) + data
-                f.seek(-step, os.SEEK_CUR)
-                size -= step
-        lines = data.splitlines()[-n:]
-        return [ln.decode("utf-8", errors="ignore") for ln in lines]
-    except Exception:
-        return []
-
-
 def run_forever(
     *,
     on_event: Callable[[dict, str], None],
     stop_event: threading.Event,
     log_path: str = LOG_FILE_PATH,
-    read_last_lines: int = 200,
 ) -> None:
-    """
-    tail -f Falco 输出文件；启动时回放最后 N 行（默认 200），随后持续追尾。
-    """
     engine = HostBehaviorEngine()
-
     if not os.path.exists(log_path):
         open(log_path, "a").close()
 
-    # 启动时先回放最后 N 行，避免“启动后一直等不到新事件”
-    for line in _read_last_lines(log_path, read_last_lines):
-        if stop_event.is_set():
-            return
-        event = engine.analyze_event(line)
-        if event:
-            try:
-                on_event(event, line)
-            except Exception:
-                pass
-
     with open(log_path, "r", encoding="utf-8", errors="ignore") as f_in:
-        f_in.seek(0, 2)  # 追尾
+        f_in.seek(0, 2)
         while not stop_event.is_set():
             line = f_in.readline()
             if not line:
                 time.sleep(0.1)
                 continue
+
             event = engine.analyze_event(line)
             if event:
                 try:
