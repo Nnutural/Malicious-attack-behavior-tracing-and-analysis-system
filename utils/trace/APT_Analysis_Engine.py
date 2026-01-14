@@ -4,7 +4,7 @@ from neo4j import GraphDatabase
 import json
 import uuid
 from collections import Counter
-from Threat_Intel import VirusTotalEnricher
+from utils.trace.Threat_Intel import VirusTotalEnricher
 import os
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
