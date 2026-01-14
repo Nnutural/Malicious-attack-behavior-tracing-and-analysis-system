@@ -4,6 +4,9 @@ from neo4j import GraphDatabase
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+#----------------------------------------------------------------------
+# 构建实体节点间的关系图
+#----------------------------------------------------------------------
 
 class GraphIngestionEngine:
     def __init__(self, uri, user, password,initial_pid_cache=None):
@@ -106,7 +109,8 @@ class GraphIngestionEngine:
                 c.cmdline = event.entities.command_line,
                 c.host = event.host_ip,
                 c.timestamp = event.timestamp,
-                c.hash = event.proc_hash  
+                c.hash = event.proc_hash, 
+                c.ports = event.entities.listen_ports  // [修正] 存入监听端口列表 
 
             // 建立 Spawn 关系
             MERGE (p)-[r:Spawn]->(c)
@@ -234,10 +238,8 @@ class GraphIngestionEngine:
 
     def ingest_network_traffic(self, data_list):
         """
-        处理网络流量数据 (network_traffic)
-        功能：
-        1. 构建 IP 通信 (IP -[Traffic_Flow]-> IP)
-        2. 构建 DNS 解析 (IP -[Resolve]-> Domain)
+        [修正版] 处理网络流量数据
+        修正内容：正确提取顶层的 src_port 和 dst_port
         """
         if not data_list:
             return
@@ -249,6 +251,8 @@ class GraphIngestionEngine:
                 processed_data.append({
                     "src_ip": item.get("src_ip"),
                     "dst_ip": item.get("dst_ip"),
+                    "src_port": item.get("src_port"),  # [修正] 提取源端口
+                    "dst_port": item.get("dst_port"),  # [修正] 提取目的端口
                     "timestamp": item.get("timestamp"),
                     "event_type": item.get("event_type"),
                     "domain": entities.get("domain"),
@@ -258,19 +262,26 @@ class GraphIngestionEngine:
 
             # 1. 常规 IP 通信 (Traffic_Flow)
             flow_query = """
-            UNWIND $events AS event
-            WITH event WHERE event.src_ip IS NOT NULL AND event.dst_ip IS NOT NULL
+                        UNWIND $events AS event
+                        WITH event WHERE event.src_ip IS NOT NULL AND event.dst_ip IS NOT NULL
 
-            MERGE (src:IP {id: event.src_ip}) SET src.ip = event.src_ip
-            MERGE (dst:IP {id: event.dst_ip}) SET dst.ip = event.dst_ip
+                        MERGE (src:IP {id: event.src_ip}) 
+                        ON CREATE SET 
+                            src.ip = event.src_ip,
+                            src.type = CASE WHEN event.src_ip STARTS WITH '192.168.' OR event.src_ip STARTS WITH '10.' THEN 'Internal' ELSE 'External' END
 
-            MERGE (src)-[r:Traffic_Flow]->(dst)
-            SET r.timestamp = event.timestamp,
-                r.protocol = event.protocol,
-                r.event_type = event.event_type,
-                r.is_covert = event.features.is_covert_channel,
-                r.channel_type = event.features.channel_type
-            """
+                        MERGE (dst:IP {id: event.dst_ip}) 
+                        ON CREATE SET 
+                            dst.ip = event.dst_ip,
+                            dst.type = CASE WHEN event.dst_ip STARTS WITH '192.168.' OR event.dst_ip STARTS WITH '10.' THEN 'Internal' ELSE 'External' END
+
+                        MERGE (src)-[r:Traffic_Flow]->(dst)
+                        SET r.timestamp = event.timestamp,
+                            r.protocol = event.protocol,
+                            r.src_port = event.src_port,  // [修正] 存入源端口
+                            r.dst_port = event.dst_port,  // [修正] 存入目的端口 (不要从features取)
+                            r.event_type = event.event_type
+                        """
             session.execute_write(lambda tx: tx.run(flow_query, events=processed_data))
 
             # 2. DNS 解析 (Resolve)
@@ -414,27 +425,84 @@ class GraphIngestionEngine:
             logging.error(f"处理攻击事件数据时发生错误: {e}")
 
         chain_query = """
-        MATCH (a1:AttackEvent), (a2:AttackEvent)
-        WHERE a1.victim_ip = a2.victim_ip
-          AND a1.attack_id <> a2.attack_id
-          // 确保 a1 在 a2 之前
-          AND datetime(a1.timestamp_end) <= datetime(a2.timestamp_start)
-          // 限制时间窗口 (例如：两个阶段间隔不超过 2 小时)
-          AND duration.inSeconds(datetime(a1.timestamp_end), datetime(a2.timestamp_start)).seconds < 7200
-          // 确保阶段逻辑递进 (例如：初始访问 -> 执行)
-          AND a1.stage_order < a2.stage_order
+            MATCH (a1:AttackEvent), (a2:AttackEvent)
+            WHERE a1.victim_ip = a2.victim_ip
+              AND a1.attack_id <> a2.attack_id
+              AND datetime(a1.timestamp_end) <= datetime(a2.timestamp_start)
+              AND duration.inSeconds(datetime(a1.timestamp_end), datetime(a2.timestamp_start)).seconds < $window
+              AND a1.stage_order < a2.stage_order
+            
+            // 关键：只有当它们之间还没有建立 NEXT_STAGE 关系时，才建立弱关联
+            AND NOT (a1)-[:NEXT_STAGE]->(a2)
 
-        MERGE (a1)-[r:NEXT_STAGE]->(a2)
-        SET r.time_gap_seconds = duration.inSeconds(datetime(a1.timestamp_end), datetime(a2.timestamp_start)).seconds
-        """
+            MERGE (a1)-[r:NEXT_STAGE]->(a2)
+            SET r.type = 'temporal',        // 标记为时间关联
+                r.confidence = 'Low',       // 置信度低
+                r.time_gap = duration.inSeconds(datetime(a1.timestamp_end), datetime(a2.timestamp_start)).seconds
+            """
 
         # 执行链接
         try:
+            # 修正：使用 execute_write 统一管理写事务，而不是 session.run
             with self.driver.session() as session:
-                session.run(chain_query)
+                session.execute_write(lambda tx: tx.run(chain_query))
             logging.info("已构建攻击阶段的时序关联 (NEXT_STAGE)")
         except Exception as e:
             logging.error(f"构建攻击链失败: {e}")
+
+    def build_causal_chains(self, time_window_seconds=7200, max_hops=10):
+        """
+        步骤 3.2：逻辑因果推断 (Causal Inference)
+        利用图谱拓扑路径验证事件之间的因果关系。
+        """
+        logging.info("开始执行因果关联分析...")
+
+        # -------------------------------------------------------
+        # 查询逻辑解释：
+        # 1. 找到同一个主机下的两个攻击事件 (a1, a2)
+        # 2. a1 发生时间 < a2 发生时间
+        # 3. 核心：检查 a1 关联的实体 (e1) 到 a2 关联的实体 (e2) 之间
+        #    是否存在一条由 Spawn, Write, Read, Inject, Connect 构成的路径
+        # -------------------------------------------------------
+
+        causal_query = """
+        MATCH (a1:AttackEvent)
+        MATCH (a2:AttackEvent)
+        WHERE a1.victim_ip = a2.victim_ip
+          AND a1.attack_id <> a2.attack_id
+          // 时间限制：a1 在 a2 之前，且在窗口内
+          AND datetime(a1.timestamp_end) <= datetime(a2.timestamp_start)
+          AND duration.inSeconds(datetime(a1.timestamp_end), datetime(a2.timestamp_start)).seconds < $window
+
+        // 找到事件背后的实体 (Process, File, Registry, IP, Domain)
+        // 注意：TRIGGERED 关系是 Entity -> AttackEvent
+        MATCH (e1)-[:TRIGGERED]->(a1)
+        MATCH (e2)-[:TRIGGERED]->(a2)
+
+        // 排除实体就是同一个的情况 (同一个进程触发了两个告警，这肯定是关联的)
+        WITH a1, a2, e1, e2
+
+        // 核心：寻找路径
+        // *1..15 表示路径长度在 1 到 15 跳之间
+        // 关系类型限制在“动作”类关系中，排除归属类关系（如 Logged_In）以避免误连
+        MATCH path = shortestPath((e1)-[:Spawn|Write|Read|Inject|Connect|Resolve|Load*1..15]-(e2))
+
+        // 建立强关联关系
+        MERGE (a1)-[r:NEXT_STAGE]->(a2)
+        SET r.type = 'causal',              // 标记为因果关联
+            r.confidence = 'High',          // 置信度高
+            r.path_length = length(path),   // 记录距离
+            r.time_gap = duration.inSeconds(datetime(a1.timestamp_end), datetime(a2.timestamp_start)).seconds
+
+        RETURN a1.attack_id, a2.attack_id, length(path) as hops
+        """
+
+        try:
+            with self.driver.session() as session:
+                result = session.execute_write(lambda tx: tx.run(causal_query, window=time_window_seconds).data())
+            logging.info(f"因果推断完成，建立了 {len(result)} 条强关联路径 (Verified Paths)")
+        except Exception as e:
+            logging.error(f"因果推断分析失败: {e}")
 
 # ==========================================
 # 测试代码
@@ -468,13 +536,35 @@ if __name__ == "__main__":
                 "file_name": "dropped.dll",
                 "hash": "a1b2c3d4e5f6..."  # 测试 Hash 导入
             }
+        },
+        {
+            "data_source": "network_traffic",
+            "timestamp": "2023-10-27T10:05:00Z",
+            "src_ip": "1.2.3.4", "dst_ip": "192.168.1.100",
+            "src_port": 55555, "dst_port": 80,
+            "protocol": "TCP",
+            "event_type": "http_request",
+            "entities": {}
+        },
+        {
+            "data_source": "host_behavior",
+            "timestamp": "2023-10-27T10:05:01Z",
+            "host_ip": "192.168.1.100",
+            "event_type": "process_create",
+            "entities": {
+                            "process_name": "nginx.exe",
+                            "pid": 1001,
+                            "listen_ports": [80, 443],
+            "parent_pid": 500
         }
+    }
     ]
 
     engine = GraphIngestionEngine("bolt://localhost:7687", "neo4j", "00000000")
     try:
         print("开始导入扩展后的数据...")
         engine.ingest_host_behavior(mock_behavior_data)
+        engine.build_causal_chains(time_window_seconds=3600, max_hops=5)
         print("导入完成。")
     except Exception as e:
         print(f"Error: {e}")

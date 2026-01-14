@@ -7,6 +7,9 @@ from datetime import datetime, timedelta
 # 配置简单的日志，方便调试
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+#----------------------------------------------------------------------
+#实现ATT&CK与实体节点间的映射关系
+#----------------------------------------------------------------------
 
 class EventAggregator:
     def __init__(self, default_window_seconds=60):

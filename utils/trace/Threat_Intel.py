@@ -5,6 +5,9 @@ import logging
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+#----------------------------------------------------------------------
+# 简易实现分析攻击者和C2服务器的基础设施关联信息
+#----------------------------------------------------------------------
 
 class VirusTotalEnricher:
     def __init__(self, api_key):
