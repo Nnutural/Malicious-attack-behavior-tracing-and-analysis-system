@@ -15,16 +15,51 @@ import hashlib
 import json
 import logging
 import platform
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from utils.winlog.parser_winlogbeat import extract_host_logs_from_windows_eventlog
 from utils.winlog.storage.hostlogs_sqlserver import insert_hostlog
+from utils.winlog.time_sync import get_last_sync_state
 
 logger = logging.getLogger(__name__)
 
 
 def _sha256_hex(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _parse_iso8601_utc(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _format_zulu(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _apply_clock_offset(event: dict[str, Any], offset_ms: float) -> None:
+    if not offset_ms:
+        return
+    raw_ts = event.get("timestamp")
+    if not raw_ts:
+        return
+    dt = _parse_iso8601_utc(str(raw_ts))
+    if dt is None:
+        return
+    event["timestamp"] = _format_zulu(dt + timedelta(milliseconds=offset_ms))
 
 
 def ingest_windows_eventlog_to_sqlserver(
@@ -46,6 +81,15 @@ def ingest_windows_eventlog_to_sqlserver(
       "errors": int
     }
     """
+    sync_state = get_last_sync_state()
+    offset_ms = float(sync_state.get("offset_ms") or 0.0)
+    delay_ms = sync_state.get("delay_ms")
+    source_ip = sync_state.get("source_ip")
+    last_sync_utc = sync_state.get("last_sync_utc")
+    clock_status = "synced" if last_sync_utc else "unsynced"
+    if clock_status == "unsynced":
+        logger.info("未发现有效时钟同步记录，clock_offset_ms=0")
+
     events = extract_host_logs_from_windows_eventlog(
         max_events=max_events,
         strict=strict,
@@ -59,6 +103,13 @@ def ingest_windows_eventlog_to_sqlserver(
     errors = 0
 
     for ev in events:
+        _apply_clock_offset(ev, offset_ms)
+        ev["clock_offset_ms"] = offset_ms
+        ev["clock_delay_ms"] = delay_ms
+        ev["clock_source_ip"] = source_ip
+        ev["clock_sync_time_utc"] = last_sync_utc
+        ev["clock_status"] = clock_status
+
         # 取出私有字段
         raw_xml = ev.pop("_raw_xml", None)
         computer_name = ev.pop("_computer_name", None)

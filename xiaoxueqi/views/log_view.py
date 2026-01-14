@@ -8,7 +8,7 @@ import ipaddress
 import platform
 import subprocess
 
-from flask import Blueprint, abort, current_app, flash, redirect, render_template, request, session, url_for
+from flask import Blueprint, abort, current_app, flash, jsonify, redirect, render_template, request, session, url_for
 
 from config import Config
 from utils.winlog.service.hostlogs_ingest import ingest_windows_eventlog_to_sqlserver
@@ -19,6 +19,7 @@ from utils.winlog.storage.hostlogs_sqlserver import (
     list_hostlogs,
     parse_result_json,
 )
+from utils.winlog.time_sync import DEFAULT_TIME_SYNC_PORT, TIME_SERVICE_MANAGER, TIME_SYNC_MANAGER
 
 bp = Blueprint("logs", __name__)
 logger = logging.getLogger(__name__)
@@ -196,6 +197,9 @@ def list_logs():
     except Exception as exc:
         _get_logger().warning("读取 host_name 下拉列表失败: %s", exc)
 
+    time_service_status = TIME_SERVICE_MANAGER.status()
+    time_sync_status = TIME_SYNC_MANAGER.status()
+
     return render_template(
         "logs.html",
         logs=logs,
@@ -205,6 +209,9 @@ def list_logs():
         db_server=db_server,
         host_name=host_name,
         host_names=host_names,
+        time_service_status=time_service_status,
+        time_sync_status=time_sync_status,
+        time_sync_default_port=DEFAULT_TIME_SYNC_PORT,
     )
 
 
@@ -233,6 +240,40 @@ def collect():
     if host_name:
         return redirect(url_for("logs.list_logs", host_name=host_name))
     return redirect(url_for("logs.list_logs"))
+
+
+@bp.route("/time_sync/service/start", methods=["POST"])
+def start_time_sync_service():
+    TIME_SERVICE_MANAGER.start()
+    host_name = (request.form.get("host_name") or "").strip()
+    if host_name:
+        return redirect(url_for("logs.list_logs", host_name=host_name))
+    return redirect(url_for("logs.list_logs"))
+
+
+@bp.route("/time_sync/service/status", methods=["GET"])
+def time_sync_service_status():
+    return jsonify(TIME_SERVICE_MANAGER.status())
+
+
+@bp.route("/time_sync/client/start", methods=["POST"])
+def start_time_sync_client():
+    payload = request.get_json(silent=True) or {}
+    target_ip = (payload.get("target_ip") or request.form.get("target_ip") or "").strip()
+    port_value = payload.get("port") or request.form.get("port")
+    port = DEFAULT_TIME_SYNC_PORT
+    if port_value is not None and str(port_value).strip():
+        try:
+            port = int(str(port_value).strip())
+        except ValueError:
+            return jsonify({"started": False, "message": "端口无效"}), 400
+    status = TIME_SYNC_MANAGER.start_one_shot_sync(target_ip=target_ip, port=port)
+    return jsonify(status)
+
+
+@bp.route("/time_sync/client/status", methods=["GET"])
+def time_sync_client_status():
+    return jsonify(TIME_SYNC_MANAGER.status())
 
 
 @bp.route("/<int:log_id>", methods=["GET"])

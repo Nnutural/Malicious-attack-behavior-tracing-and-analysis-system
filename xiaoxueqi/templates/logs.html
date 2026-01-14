@@ -123,6 +123,28 @@
   .flash { margin: 10px 0 0; padding: 10px 12px; border-radius: 8px; border: 1px solid #e6e6e6; background: #fff; font-size: 13px; }
   .flash.info { border-color: #bfdbfe; background: #eff6ff; color: #1e3a8a; }
   .flash.error { border-color: #fecaca; background: #fff1f2; color: #7f1d1d; }
+
+  .sync-panel { display: flex; gap: 12px; flex-wrap: wrap; width: 100%; }
+  .sync-card {
+    border: 1px solid #e6e6e6;
+    background: #fff;
+    border-radius: 10px;
+    padding: 10px 12px;
+    min-width: 280px;
+  }
+  .sync-title { font-size: 13px; font-weight: 700; color: #334155; margin-bottom: 8px; }
+  .sync-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .sync-input {
+    border: 1px solid #e6e6e6;
+    border-radius: 8px;
+    padding: 8px 10px;
+    min-width: 140px;
+  }
+  .sync-status { font-size: 12px; color: #4b5563; margin-top: 6px; }
+  .sync-msg { margin-top: 6px; padding: 6px 8px; border-radius: 6px; border: 1px solid #e6e6e6; font-size: 12px; background: #f8fafc; }
+  .sync-msg.info { border-color: #bfdbfe; background: #eff6ff; color: #1e3a8a; }
+  .sync-msg.error { border-color: #fecaca; background: #fff1f2; color: #7f1d1d; }
+  .sync-msg.success { border-color: #86efac; background: #ecfdf3; color: #065f46; }
 </style>
 {% endblock %}
 
@@ -173,6 +195,36 @@
         >
         <button class="btn secondary" type="submit">应用</button>
       </form>
+
+      <div class="sync-panel">
+        <div class="sync-card">
+          <div class="sync-title">软同步时钟（Leader）</div>
+          <form method="post" action="{{ url_for('logs.start_time_sync_service') }}">
+            <input type="hidden" name="host_name" value="{{ host_name or '' }}">
+            <button class="btn" type="submit">启用同步服务</button>
+          </form>
+          <div class="sync-status">
+            同步服务状态：
+            {% if time_service_status and time_service_status.running %}
+              <b>Running</b>
+            {% else %}
+              <b>Stopped</b>
+            {% endif %}
+            ，端口：<b>{{ (time_service_status.port if time_service_status else time_sync_default_port) }}</b>
+          </div>
+        </div>
+        <div class="sync-card">
+          <div class="sync-title">软同步时钟（Client）</div>
+          <form id="time-sync-client-form">
+            <div class="sync-row">
+              <input id="time-sync-target" class="sync-input" name="target_ip" type="text" placeholder="目标IP，例如 10.0.0.5" required>
+              <input id="time-sync-port" class="sync-input" name="port" type="number" placeholder="端口 {{ time_sync_default_port }}" min="1" max="65535">
+              <button class="btn secondary" type="submit">对该主机进行时钟同步</button>
+            </div>
+          </form>
+          <div id="time-sync-client-msg" class="sync-msg info">尚未开始同步。</div>
+        </div>
+      </div>
     </div>
 
     <div class="toolbar-right" style="color:#555;font-size:13px;">
@@ -264,4 +316,112 @@
     </tbody>
   </table>
 
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  (function () {
+    const form = document.getElementById("time-sync-client-form");
+    const msgBox = document.getElementById("time-sync-client-msg");
+    if (!form || !msgBox) return;
+
+    const defaultPort = {{ time_sync_default_port }};
+    let polling = false;
+    let pollTimer = null;
+
+    function setMsg(text, level) {
+      msgBox.textContent = text;
+      msgBox.className = "sync-msg " + (level || "info");
+    }
+
+    function formatMs(value) {
+      if (value === null || value === undefined) return "n/a";
+      const num = Number(value);
+      if (Number.isNaN(num)) return "n/a";
+      const sign = num >= 0 ? "+" : "";
+      return sign + num.toFixed(1) + "ms";
+    }
+
+    function stopPolling() {
+      polling = false;
+      if (pollTimer) {
+        clearTimeout(pollTimer);
+        pollTimer = null;
+      }
+    }
+
+    function pollStatus() {
+      fetch("{{ url_for('logs.time_sync_client_status') }}")
+        .then((resp) => resp.json())
+        .then((data) => {
+          if (!data) {
+            stopPolling();
+            setMsg("同步结束：FAILED，原因=状态读取失败", "error");
+            return;
+          }
+          if (data.running) {
+            pollTimer = setTimeout(pollStatus, 1000);
+            return;
+          }
+          stopPolling();
+          if (data.ok) {
+            const offsetText = formatMs(data.offset_ms);
+            const delayText = formatMs(data.delay_ms);
+            const sourceText = data.source_ip || "";
+            setMsg(`同步结束：OK，offset=${offsetText}，delay=${delayText}，source=${sourceText}`, "success");
+          } else {
+            const reason = data.message || "未知错误";
+            setMsg(`同步结束：FAILED，原因=${reason}`, "error");
+          }
+        })
+        .catch(() => {
+          stopPolling();
+          setMsg("同步结束：FAILED，原因=状态接口异常", "error");
+        });
+    }
+
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      const targetIp = document.getElementById("time-sync-target").value.trim();
+      let portValue = document.getElementById("time-sync-port").value.trim();
+      if (!targetIp) {
+        setMsg("开始同步失败：目标地址为空", "error");
+        return;
+      }
+      if (!portValue) {
+        portValue = String(defaultPort);
+      }
+      setMsg(`开始同步：目标 ${targetIp}:${portValue}（后台执行）`, "info");
+      stopPolling();
+
+      fetch("{{ url_for('logs.start_time_sync_client') }}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target_ip: targetIp, port: portValue })
+      })
+        .then((resp) => resp.json().then((data) => ({ ok: resp.ok, data })))
+        .then(({ ok, data }) => {
+          if (!ok) {
+            const reason = (data && data.message) ? data.message : "请求失败";
+            setMsg(`开始同步失败：${reason}`, "error");
+            return;
+          }
+          if (data && data.started === false) {
+            const reason = data.message || "已有任务在进行";
+            setMsg(`开始同步失败：${reason}`, "error");
+            if (data.running) {
+              polling = true;
+              pollTimer = setTimeout(pollStatus, 1000);
+            }
+            return;
+          }
+          polling = true;
+          pollTimer = setTimeout(pollStatus, 1000);
+        })
+        .catch(() => {
+          setMsg("开始同步失败：请求异常", "error");
+        });
+    });
+  })();
+</script>
 {% endblock %}
