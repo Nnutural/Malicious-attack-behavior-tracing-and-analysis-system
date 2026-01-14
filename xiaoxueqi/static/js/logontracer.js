@@ -323,16 +323,16 @@
       processing: true,
       paging: true,
       ajax: function (data, callback) {
-        const params = new URLSearchParams();
-        params.set("job_id", jobId);
-        params.set("draw", data.draw);
-        params.set("start", data.start);
-        params.set("length", data.length);
+        const baseUrl = url || API_SESSIONS;
+        const requestUrl = new URL(baseUrl, window.location.origin);
+        requestUrl.searchParams.set("job_id", jobId);
+        requestUrl.searchParams.set("draw", data.draw);
+        requestUrl.searchParams.set("start", data.start);
+        requestUrl.searchParams.set("length", data.length);
         if (data.search && data.search.value) {
-          params.set("search[value]", data.search.value);
+          requestUrl.searchParams.set("search[value]", data.search.value);
         }
-        const requestUrl = (url || API_SESSIONS) + "?" + params.toString();
-        fetch(requestUrl)
+        fetch(requestUrl.toString())
           .then((resp) => resp.json())
           .then((json) => callback(json))
           .catch(() => callback({ draw: data.draw, recordsTotal: 0, recordsFiltered: 0, data: [] }));
