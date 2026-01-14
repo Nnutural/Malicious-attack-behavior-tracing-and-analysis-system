@@ -1,0 +1,110 @@
+{% extends "layout.html" %}
+
+{% block title %}登录会话可视化 - 攻击溯源分析系统{% endblock %}
+
+{% block extra_css %}
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/datatables.net-dt@1.13.8/css/jquery.dataTables.min.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/logontracer.css') }}">
+{% endblock %}
+
+{% block content %}
+  <div class="page-head">
+    <div class="page-head-row">
+      <div>
+        <h2>登录会话可视化（LogonTracer）</h2>
+        <p class="muted">基于 HostLogs.result 构建登录关系图、会话列表与时间线。</p>
+      </div>
+      <a class="btn btn-secondary" href="{{ url_for('logs.list_logs') }}">返回日志分析</a>
+    </div>
+  </div>
+
+  <div class="lt-toolbar card">
+    <div class="lt-field">
+      <label for="lt-start">开始时间</label>
+      <input id="lt-start" type="datetime-local" placeholder="默认最近24小时">
+    </div>
+    <div class="lt-field">
+      <label for="lt-end">结束时间</label>
+      <input id="lt-end" type="datetime-local" placeholder="默认最近24小时">
+    </div>
+    <div class="lt-field">
+      <label for="lt-user">用户</label>
+      <input id="lt-user" type="text" placeholder="可选 user">
+    </div>
+    <div class="lt-field">
+      <label for="lt-src-ip">源 IP</label>
+      <input id="lt-src-ip" type="text" placeholder="可选 src_ip">
+    </div>
+    <div class="lt-field">
+      <label for="lt-host-name">主机（可多选）</label>
+      <div id="lt-host-multi" class="lt-multi-select">
+        <button type="button" class="lt-multi-toggle" aria-expanded="false">选择主机</button>
+        <div class="lt-multi-panel">
+          {% if host_names %}
+            {% for hn in host_names %}
+              <label class="lt-multi-item">
+                <input type="checkbox" value="{{ hn }}">
+                <span>{{ hn }}</span>
+              </label>
+            {% endfor %}
+          {% else %}
+            <div class="lt-multi-empty">暂无主机</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    <div class="lt-field">
+      <label for="lt-bucket">聚合粒度</label>
+      <select id="lt-bucket">
+        <option value="hour" selected>按小时</option>
+        <option value="day">按天</option>
+      </select>
+    </div>
+    <div class="lt-actions">
+      <button id="lt-start-btn" class="btn" type="button">开始分析</button>
+    </div>
+    <div id="lt-status" class="lt-status">等待启动分析。</div>
+  </div>
+
+  <div class="lt-grid">
+    <div class="lt-card">
+      <div class="lt-card-title">登录关系图</div>
+      <div id="lt-graph-grid" class="lt-graph-grid"></div>
+    </div>
+    <div class="lt-card">
+      <div class="lt-card-title">时间线（成功/失败）</div>
+      <div class="lt-chart-wrap">
+        <canvas id="lt-timeline"></canvas>
+      </div>
+    </div>
+    <div class="lt-card lt-card-full">
+      <div class="lt-card-title">登录会话列表</div>
+      <table id="lt-sessions-table" class="display" style="width:100%">
+        <thead>
+          <tr>
+            <th>Host</th>
+            <th>Session ID</th>
+            <th>User</th>
+            <th>Source IP</th>
+            <th>Start</th>
+            <th>End</th>
+            <th>Events</th>
+            <th>Status</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+{% endblock %}
+
+{% block extra_js %}
+  <script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/datatables.net@1.13.8/js/jquery.dataTables.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.26.0/dist/cytoscape.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
+  <script src="{{ url_for('static', filename='js/logontracer.js') }}"></script>
+{% endblock %}

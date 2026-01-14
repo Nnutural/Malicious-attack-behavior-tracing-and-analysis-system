@@ -145,6 +145,23 @@
   .sync-msg.info { border-color: #bfdbfe; background: #eff6ff; color: #1e3a8a; }
   .sync-msg.error { border-color: #fecaca; background: #fff1f2; color: #7f1d1d; }
   .sync-msg.success { border-color: #86efac; background: #ecfdf3; color: #065f46; }
+
+  .logontracer-entry{
+    margin-top: 16px;
+    padding: 14px 16px;
+    border-radius: 10px;
+    border: 1px dashed #e5e7eb;
+    background: #fff;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .logontracer-entry p{
+    margin: 0;
+    color: #4b5563;
+    font-size: 13px;
+  }
 </style>
 {% endblock %}
 
@@ -315,6 +332,13 @@
       {% endif %}
     </tbody>
   </table>
+
+  <div class="logontracer-entry">
+    <a class="btn" href="{{ url_for('logs.logontracer_page') }}">
+      登录会话可视化（LogonTracer）
+    </a>
+    <p>进入可视化分析页面，按时间范围构建登录关系图、会话列表与时间线。</p>
+  </div>
 
 {% endblock %}
 
