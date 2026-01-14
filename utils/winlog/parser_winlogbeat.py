@@ -29,7 +29,7 @@ from .state_store import StateStore
 
 logger = logging.getLogger(__name__)
 
-EVENT_TYPE_MAP = {
+BASE_EVENT_TYPE_MAP = {
     "4624": "user_logon",
     "4634": "user_logoff",
     "4647": "user_logoff",
@@ -43,6 +43,13 @@ EVENT_TYPE_MAP = {
     "4756": "group_membership_add",
     "1102": "log_clear",
 }
+
+EXT_EVENT_TYPE_MAP = {
+    "4663": "object_access",
+    "4657": "registry_value_modified",
+}
+OBJECT_ACCESS_EVENT_IDS = set(EXT_EVENT_TYPE_MAP.keys())
+EVENT_TYPE_MAP = {**BASE_EVENT_TYPE_MAP, **EXT_EVENT_TYPE_MAP}
 
 EVENT_TYPE_ALIASES = {"login_success": "user_logon"}
 ALLOWED_EVENT_TYPES = set(EVENT_TYPE_MAP.values())
@@ -77,6 +84,16 @@ def _get_event_data_value(event_data: dict[str, Any], candidates: list[str]) -> 
         if norm in index:
             return index[norm]
     return None
+
+
+def _is_registry_path(value: str) -> bool:
+    text = value.strip().upper()
+    return text.startswith("\\REGISTRY\\")
+
+
+def _looks_like_file_path(value: str) -> bool:
+    text = value.strip()
+    return ":\\" in text or text.startswith("\\\\")
 
 
 def _handle_error(strict: bool, message: str, *, filename: str, line_no: int, raw_id: str | None = None) -> None:
@@ -228,6 +245,56 @@ def _extract_entities(*, event_type: str, event_data: dict[str, Any], record_con
         if clear_user:
             entities["user"] = clear_user
 
+    if event_type == "object_access":
+        object_name = _get_event_data_value(event_data, ["ObjectName", "Object Name"])
+        object_type = _get_event_data_value(event_data, ["ObjectType", "Object Type"])
+        process_name = _get_event_data_value(event_data, ["ProcessName", "Process Name"])
+        pid = _get_event_data_value(event_data, ["ProcessId", "Process ID"])
+        accesses = _get_event_data_value(event_data, ["Accesses"])
+        access_mask = _get_event_data_value(event_data, ["AccessMask", "Access Mask"])
+        value_name = _get_event_data_value(event_data, ["ObjectValueName", "Object Value Name"])
+
+        object_text = str(object_name).strip() if object_name else ""
+        object_type_text = str(object_type).strip().lower() if object_type else ""
+        if object_text:
+            if _is_registry_path(object_text) or "registry" in object_type_text or "key" in object_type_text:
+                entities["registry_key"] = object_text
+            elif _looks_like_file_path(object_text) or "file" in object_type_text:
+                entities["file_path"] = object_text
+        if value_name:
+            entities["registry_value_name"] = value_name
+        if process_name:
+            entities["process_name"] = process_name
+        if pid:
+            entities["pid"] = pid
+        if accesses:
+            entities["accesses"] = accesses
+        if access_mask:
+            entities["access_mask"] = access_mask
+
+    if event_type == "registry_value_modified":
+        registry_key = _get_event_data_value(event_data, ["ObjectName", "Object Name"])
+        value_name = _get_event_data_value(event_data, ["ObjectValueName", "Object Value Name"])
+        old_value = _get_event_data_value(event_data, ["OldValue", "Old Value"])
+        new_value = _get_event_data_value(event_data, ["NewValue", "New Value"])
+        operation_type = _get_event_data_value(event_data, ["OperationType", "Operation Type"])
+        process_name = _get_event_data_value(event_data, ["ProcessName", "Process Name"])
+        pid = _get_event_data_value(event_data, ["ProcessId", "Process ID"])
+        if registry_key:
+            entities["registry_key"] = registry_key
+        if value_name:
+            entities["registry_value_name"] = value_name
+        if old_value:
+            entities["registry_old_value"] = old_value
+        if new_value:
+            entities["registry_new_value"] = new_value
+        if operation_type:
+            entities["operation_type"] = operation_type
+        if process_name:
+            entities["process_name"] = process_name
+        if pid:
+            entities["pid"] = pid
+
     return entities
 
 
@@ -239,6 +306,32 @@ def _build_description(event_type: str, raw_id: str, entities: dict[str, Any]) -
         description_parts.append(f"源IP={entities['src_ip']}")
     if "session_id" in entities:
         description_parts.append(f"会话ID={entities['session_id']}")
+    if event_type == "object_access":
+        if "file_path" in entities:
+            description_parts.append(f"文件={entities['file_path']}")
+        if "registry_key" in entities:
+            description_parts.append(f"注册表键={entities['registry_key']}")
+        if "registry_value_name" in entities:
+            description_parts.append(f"值={entities['registry_value_name']}")
+        if "process_name" in entities:
+            description_parts.append(f"进程={entities['process_name']}")
+        if "accesses" in entities:
+            description_parts.append(f"Accesses={entities['accesses']}")
+        if "access_mask" in entities:
+            description_parts.append(f"AccessMask={entities['access_mask']}")
+    if event_type == "registry_value_modified":
+        if "registry_key" in entities:
+            description_parts.append(f"键={entities['registry_key']}")
+        if "registry_value_name" in entities:
+            description_parts.append(f"值={entities['registry_value_name']}")
+        if "registry_new_value" in entities:
+            description_parts.append(f"New={entities['registry_new_value']}")
+        if "registry_old_value" in entities:
+            description_parts.append(f"Old={entities['registry_old_value']}")
+        if "operation_type" in entities:
+            description_parts.append(f"操作={entities['operation_type']}")
+        if "process_name" in entities:
+            description_parts.append(f"进程={entities['process_name']}")
     return ", ".join(description_parts)
 
 
@@ -287,6 +380,7 @@ def extract_host_logs_from_windows_eventlog(
     *,
     channels: list[str] | None = None,
     event_ids: list[str] | None = None,
+    include_object_access: bool = False,
     include_xml: bool = False,
     batch_size: int = 512,
     max_events: int = 200,
@@ -307,11 +401,23 @@ def extract_host_logs_from_windows_eventlog(
     use_bookmark:
       - True（默认）：增量采集（使用 StateStore 的 last_record_id）
       - False：每次抓取最新 max_events（用于按钮重复点击演示）
+
+    include_object_access:
+      - False（默认）：不采集 4663/4657，避免增加噪声
+      - True：采集对象访问相关事件
+        注意：需在 Windows 上启用“对象访问”审计策略并配置 SACL 才会产生相关事件。
     """
     if platform.system().lower() != "windows":
         raise NotImplementedError("Windows Event Log 采集仅支持 Windows 平台")
 
-    event_ids = event_ids or sorted(EVENT_TYPE_MAP.keys())
+    if event_ids is None:
+        event_ids = sorted(BASE_EVENT_TYPE_MAP.keys())
+    else:
+        event_ids = [str(item) for item in event_ids]
+    if include_object_access:
+        for event_id in sorted(OBJECT_ACCESS_EVENT_IDS):
+            if event_id not in event_ids:
+                event_ids.append(event_id)
     store = state_store or StateStore()
 
     if not use_bookmark:
@@ -395,6 +501,7 @@ def extract_host_logs_from_winlogbeat_ndjson(
     strict: bool = True,
     clock_offset_ms: int = 0,
     enable_time_alignment: bool = True,
+    include_object_access: bool = False,
 ) -> list[dict]:
     """
     兼容 Winlogbeat output.file 生成的 NDJSON 文件回放。
@@ -426,6 +533,8 @@ def extract_host_logs_from_winlogbeat_ndjson(
         raw_id = str(event.get("code") or system.get("eventID") or "")
         if not raw_id:
             _handle_error(strict, "缺少 raw_id(event.code)", filename=str(path), line_no=line_no)
+            continue
+        if raw_id in OBJECT_ACCESS_EVENT_IDS and not include_object_access:
             continue
 
         ts = record.get("@timestamp") or record.get("timestamp") or ""
