@@ -1,0 +1,32 @@
+{% extends "layout.html" %}
+
+{% block title %}流量详情 - 攻击溯源分析系统{% endblock %}
+
+{% block content %}
+  <h2>流量详情</h2>
+  <p>展示单条网络流量事件的归一化字段（result）与完整内容（content）。</p>
+
+  <a href="{{ url_for('traffic.index') }}">返回列表</a>
+
+  <h3>流量 #{{ traffic.id }}</h3>
+
+  <table>
+    <tbody>
+      <tr><th>create_time</th><td>{{ traffic.create_time }}</td></tr>
+      <tr><th>event_time_utc</th><td>{{ traffic.event_time_utc }}</td></tr>
+      <tr><th>timestamp</th><td>{{ traffic.timestamp }}</td></tr>
+      <tr><th>src_ip</th><td>{{ traffic.src_ip }}</td></tr>
+      <tr><th>dst_ip</th><td>{{ traffic.dst_ip }}</td></tr>
+      <tr><th>protocol</th><td>{{ traffic.protocol }}</td></tr>
+      <tr><th>event_type</th><td>{{ traffic.event_type }}</td></tr>
+      <tr><th>description</th><td>{{ traffic.description }}</td></tr>
+      <tr><th>event_hash</th><td>{{ traffic.event_hash }}</td></tr>
+    </tbody>
+  </table>
+
+  <h4>归一化结果（result）</h4>
+  <pre>{{ traffic.result_json_pretty }}</pre>
+
+  <h4>完整内容（content）</h4>
+  <pre>{{ traffic.raw_content }}</pre>
+{% endblock %}

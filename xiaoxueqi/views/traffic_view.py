@@ -2,17 +2,17 @@
 网络流量分析视图
 - 在线抓包 start/stop/status
 - 离线上传 pcap/pcapng 导入入库
-- 最近流量列表/详情
+- 最近流量列表/详情页
 """
 from __future__ import annotations
 
 import os
 import time
-import json
 import threading
+import json
 from pathlib import Path
 
-from flask import Blueprint, current_app, jsonify, render_template, request
+from flask import Blueprint, current_app, jsonify, render_template, request, abort
 
 from config import Config
 from utils.traffic_fenxi.parser import PcapParser
@@ -27,20 +27,62 @@ from utils.traffic_fenxi.storage_sqlserver import (
 
 bp = Blueprint("traffic", __name__)
 
-# 全局单例（最小实现：同一时间只允许一个 live capture）
 _LIVE_LOCK = threading.Lock()
 _LIVE_HANDLE: LiveCaptureHandle | None = None
 
+PAGE_SIZE = 20
+
 
 def _get_conn_str() -> str:
-    # 目前你的项目 logs 支持切 DB server；traffic 暂时先用 Config
-    # 后续如果你也要支持“页面设置 DB server”，再改为 session 取值即可
     return Config.SQL_CONN_STR
+
+
+def _row_to_list_item(r) -> dict:
+    ev = parse_result_json(r.result)
+    return {
+        "id": r.id,
+        "create_time": str(r.create_time or ""),
+        "timestamp": str(ev.get("timestamp") or ""),
+        "src_ip": ev.get("src_ip") or "",
+        "dst_ip": ev.get("dst_ip") or "",
+        "protocol": ev.get("protocol") or "",
+        "event_type": ev.get("event_type") or "",
+        "description": (ev.get("description") or ""),
+    }
 
 
 @bp.route("/", methods=["GET"])
 def index():
-    return render_template("traffic.html")
+    page = request.args.get("page", 1, type=int)
+    page = max(page, 1)
+
+    total = 0
+    total_pages = 1
+    items = []
+
+    conn_str = _get_conn_str()
+    try:
+        total = count_networktraffic(conn_str=conn_str)
+        total_pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
+        if page > total_pages:
+            page = total_pages
+
+        offset = (page - 1) * PAGE_SIZE
+        rows = list_networktraffic(offset=offset, limit=PAGE_SIZE, host_name=None, conn_str=conn_str)
+        items = [_row_to_list_item(r) for r in rows]
+    except Exception:
+        items = []
+        total = 0
+        total_pages = 1
+
+    return render_template(
+        "traffic.html",
+        items=items,
+        page=page,
+        total=total,
+        total_pages=total_pages,
+        page_size=PAGE_SIZE,
+    )
 
 
 @bp.route("/api/live/status", methods=["GET"])
@@ -66,16 +108,6 @@ def api_live_status():
 
 @bp.route("/api/live/start", methods=["POST"])
 def api_live_start():
-    """
-    body:
-    {
-      "iface": "\\Device\\NPF_{...}",
-      "bpf": "net 192.168.86.0/24",
-      "flush_interval_sec": 1.0,
-      "enable_analysis": true,
-      "host_name": "VMnet1"
-    }
-    """
     global _LIVE_HANDLE
 
     payload = request.get_json(silent=True) or {}
@@ -105,7 +137,7 @@ def api_live_start():
             bpf=bpf,
             enable_analysis=enable_analysis,
             flush_interval_sec=flush_interval_sec,
-            host_name=host_name or iface,  # 默认用 iface 当采集点标识
+            host_name=host_name or iface,
             content_meta={
                 "capture_type": "live",
                 "iface": iface,
@@ -137,12 +169,6 @@ def api_live_stop():
 
 @bp.route("/api/upload", methods=["POST"])
 def api_upload():
-    """
-    multipart/form-data:
-    - file: pcap/pcapng
-    - host_name: optional
-    - enable_analysis: optional ("1"/"0")
-    """
     if "file" not in request.files:
         return jsonify({"ok": False, "error": "file required"}), 400
 
@@ -184,7 +210,6 @@ def api_upload():
 
 @bp.route("/api/recent", methods=["GET"])
 def api_recent():
-    host_name = (request.args.get("host_name") or "").strip() or None
     page = request.args.get("page", 1, type=int)
     page = max(page, 1)
     page_size = request.args.get("page_size", 20, type=int)
@@ -192,31 +217,13 @@ def api_recent():
     offset = (page - 1) * page_size
 
     conn_str = _get_conn_str()
-    total = 0
     try:
-        total = count_networktraffic(host_name=host_name, conn_str=conn_str)
+        total = count_networktraffic(conn_str=conn_str)
     except Exception:
         total = 0
 
-    rows = list_networktraffic(offset=offset, limit=page_size, host_name=host_name, conn_str=conn_str)
-
-    items = []
-    for r in rows:
-        ev = parse_result_json(r.result)
-        items.append(
-            {
-                "id": r.id,
-                "create_time": str(r.create_time or ""),
-                "host_name": r.host_name,
-                "timestamp": str(ev.get("timestamp") or ""),
-                "src_ip": ev.get("src_ip"),
-                "dst_ip": ev.get("dst_ip"),
-                "protocol": ev.get("protocol"),
-                "event_type": ev.get("event_type"),
-                "description": ev.get("description") or "",
-            }
-        )
-
+    rows = list_networktraffic(offset=offset, limit=page_size, host_name=None, conn_str=conn_str)
+    items = [_row_to_list_item(r) for r in rows]
     return jsonify({"ok": True, "total": total, "page": page, "page_size": page_size, "items": items})
 
 
@@ -241,4 +248,34 @@ def api_detail(traffic_id: int):
                 "result_raw": row.result,
             },
         }
+    )
+
+
+@bp.route("/detail/<int:traffic_id>", methods=["GET"])
+def detail_page(traffic_id: int):
+    row = get_networktraffic_by_id(traffic_id, conn_str=_get_conn_str())
+    if not row:
+        abort(404)
+
+    ev = parse_result_json(row.result) or {}
+
+    # 关键：在后端就把 pretty 字符串准备好，模板不再用 tojson(ensure_ascii=False)
+    pretty = json.dumps(ev, ensure_ascii=False, indent=2) if ev else (row.result or "")
+
+    return render_template(
+        "traffic_detail.html",
+        traffic={
+            "id": row.id,
+            "create_time": str(row.create_time or ""),
+            "event_hash": row.event_hash,
+            "event_time_utc": str(row.event_time_utc or ""),
+            "timestamp": str(ev.get("timestamp") or ""),
+            "src_ip": ev.get("src_ip") or "",
+            "dst_ip": ev.get("dst_ip") or "",
+            "protocol": ev.get("protocol") or "",
+            "event_type": ev.get("event_type") or "",
+            "description": ev.get("description") or "",
+            "result_json_pretty": pretty,  # <- 字符串
+            "raw_content": row.content or "",
+        },
     )

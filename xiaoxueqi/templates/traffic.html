@@ -3,32 +3,103 @@
 {% block title %}流量分析 - 攻击溯源分析系统{% endblock %}
 
 {% block content %}
-<h2>网络流量分析</h2>
-<p class="muted">
-  支持：在线抓包（Start/Stop，实时入库） / 上传 pcap/pcapng 导入入库 / 最近流量列表。
-</p>
+<div class="page-head">
+  <div class="page-head-row">
+    <div>
+      <h2>网络流量分析</h2>
+      <p class="muted" style="margin:0;">
+        在线抓包支持 Npcap/WinPcap 网卡设备名（Windows 下通常是 <code>\Device\NPF_{...}</code>）。
+        离线导入支持 <code>.pcap / .pcapng</code>，入库到 <code>dbo.NetworkTraffic</code>。
+      </p>
+    </div>
+  </div>
+</div>
+
+<style>
+  /* 只针对 traffic 页面做一点局部优化，避免影响全局 */
+  .tf-card-title{ display:flex; align-items:baseline; gap:10px; margin-bottom:10px; }
+  .tf-card-title h3{ margin:0; }
+  .tf-hint{ font-size:12px; color: var(--muted); line-height:1.55; margin:0; }
+
+  .tf-form{
+    display:grid;
+    grid-template-columns: 1.4fr 1fr 0.8fr 140px 160px auto;
+    gap:12px;
+    align-items:end;
+  }
+  @media (max-width: 1100px){
+    .tf-form{ grid-template-columns: 1fr 1fr; }
+  }
+
+  .tf-field{ display:flex; flex-direction:column; gap:6px; }
+  .tf-field label{ font-size:12px; color:#4b5563; font-weight:700; }
+  .tf-field input, .tf-field select{
+    border:1px solid var(--border);
+    border-radius:10px;
+    padding:9px 10px;
+    font-size:14px;
+    background:#fff;
+  }
+
+  .tf-actions{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; justify-content:flex-end; }
+
+  .tf-status{
+    width:100%;
+    padding:10px 12px;
+    border-radius:12px;
+    border:1px solid var(--border);
+    background:#f8fafc;
+    font-size:13px;
+    color:#0f172a;
+    margin-top:10px;
+    line-height: 1.5;
+    word-break: break-word;
+  }
+  .tf-status.ok{ border-color:#86efac; background:#ecfdf3; color:#065f46; }
+  .tf-status.error{ border-color:#fecaca; background:#fff1f2; color:#7f1d1d; }
+
+  /* 按钮“变暗”反馈 */
+  .btn[disabled]{ opacity:.55; cursor:not-allowed; filter: grayscale(0.2); }
+
+  /* 列表固定布局，尽量不左右滚动 */
+  .tf-table{
+    table-layout: fixed;
+  }
+  .tf-table th, .tf-table td{
+    white-space: normal;     /* 允许换行 */
+    overflow: hidden;
+    text-overflow: ellipsis; /* 太长截断 */
+    vertical-align: top;
+  }
+</style>
 
 <div class="card">
-  <h3>在线抓包</h3>
+  <div class="tf-card-title">
+    <h3>在线抓包</h3>
+    <p class="tf-hint">
+      建议管理员权限运行 Flask。示例 iface：<code>\Device\NPF_{FDE60FA6-C939-4031-9313-4FB8EF4F595B}</code>（VMnet1）。
+      BPF 示例：<code>net 192.168.86.0/24</code> / <code>port 53</code> / <code>host 192.168.86.131</code>
+    </p>
+  </div>
 
-  <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
-    <div class="lt-field" style="min-width:420px;">
-      <label>iface（必填，建议直接粘贴 NPF 名称）</label>
-      <input id="tf-iface" type="text" placeholder="\Device\NPF_{FDE60FA6-C939-4031-9313-4FB8EF4F595B}">
+  <div class="tf-form">
+    <div class="tf-field">
+      <label for="tf-iface">网卡 iface（必填）</label>
+      <input id="tf-iface" type="text" placeholder="\Device\NPF_{...}">
     </div>
 
-    <div class="lt-field" style="min-width:360px;">
-      <label>BPF（可空，如：net 192.168.86.0/24 或 port 53）</label>
+    <div class="tf-field">
+      <label for="tf-bpf">过滤规则 BPF（可空）</label>
       <input id="tf-bpf" type="text" placeholder="net 192.168.86.0/24">
     </div>
 
-    <div class="lt-field" style="min-width:200px;">
-      <label>host_name（采集点标识）</label>
+    <div class="tf-field">
+      <label for="tf-hostname">采集点 host_name（可选）</label>
       <input id="tf-hostname" type="text" placeholder="VMnet1 / sensor-1">
     </div>
 
-    <div class="lt-field" style="min-width:140px;">
-      <label>flush(s)</label>
+    <div class="tf-field">
+      <label for="tf-flush">写库 flush(s)</label>
       <select id="tf-flush">
         <option value="0.5">0.5</option>
         <option value="1" selected>1</option>
@@ -37,104 +108,132 @@
       </select>
     </div>
 
-    <div class="lt-field" style="min-width:160px;">
-      <label>analysis</label>
+    <div class="tf-field">
+      <label for="tf-analysis">分析开关</label>
       <select id="tf-analysis">
-        <option value="1" selected>enable</option>
-        <option value="0">disable</option>
+        <option value="1" selected>启用（会话/异常/隐蔽信道）</option>
+        <option value="0">关闭（仅入库）</option>
       </select>
     </div>
 
-    <div style="display:flex; gap:10px; align-items:center;">
+    <div class="tf-actions">
       <button class="btn" id="tf-start">开始捕获</button>
       <button class="btn btn-secondary" id="tf-stop" disabled>停止捕获</button>
     </div>
   </div>
 
-  <div style="margin-top:12px;">
-    <div id="tf-status" class="lt-status">状态：unknown</div>
-  </div>
+  <div id="tf-status" class="tf-status">状态：unknown</div>
 </div>
 
 <div class="card" style="margin-top:14px;">
-  <h3>离线上传（pcap/pcapng）导入入库</h3>
+  <div class="tf-card-title">
+    <h3>离线导入（pcap / pcapng）</h3>
+    <p class="tf-hint">
+      上传后会解析并写入数据库。适合快速造数或离线复现。
+    </p>
+  </div>
 
-  <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
-    <div class="lt-field" style="min-width:420px;">
-      <label>文件</label>
+  <div class="tf-form" style="grid-template-columns: 1.6fr 0.8fr 200px auto;">
+    <div class="tf-field">
+      <label for="tf-file">选择文件</label>
       <input id="tf-file" type="file" accept=".pcap,.pcapng,.cap">
     </div>
 
-    <div class="lt-field" style="min-width:220px;">
-      <label>host_name（可选）</label>
+    <div class="tf-field">
+      <label for="tf-upload-hostname">host_name（可选）</label>
       <input id="tf-upload-hostname" type="text" placeholder="pcap_import">
     </div>
 
-    <div class="lt-field" style="min-width:160px;">
-      <label>analysis</label>
+    <div class="tf-field">
+      <label for="tf-upload-analysis">分析开关</label>
       <select id="tf-upload-analysis">
-        <option value="1" selected>enable</option>
-        <option value="0">disable</option>
+        <option value="1" selected>启用</option>
+        <option value="0">关闭</option>
       </select>
     </div>
 
-    <div>
+    <div class="tf-actions" style="justify-content:flex-end;">
       <button class="btn" id="tf-upload">上传并导入</button>
     </div>
   </div>
 
-  <div style="margin-top:12px;">
-    <div id="tf-upload-msg" class="lt-status">等待上传。</div>
-  </div>
+  <div id="tf-upload-msg" class="tf-status" style="margin-top:10px;">等待上传。</div>
 </div>
 
 <div class="card" style="margin-top:14px;">
-  <h3>最近流量（分页）</h3>
-
-  <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
-    <div class="lt-field" style="min-width:220px;">
-      <label>host_name 筛选（可空）</label>
-      <input id="tf-filter-hostname" type="text" placeholder="VMnet1">
-    </div>
-    <div class="lt-field" style="min-width:140px;">
-      <label>page_size</label>
-      <select id="tf-pagesize">
-        <option value="10">10</option>
-        <option value="20" selected>20</option>
-        <option value="50">50</option>
-      </select>
-    </div>
+  <div class="page-head-row" style="margin-bottom:10px;">
     <div>
-      <button class="btn" id="tf-refresh">刷新</button>
+      <h3 style="margin:0;">最近流量</h3>
+      <p class="tf-hint" style="margin-top:6px;">
+        列表固定布局不左右滚动；点击“详情”查看 result/content。
+      </p>
+    </div>
+    <div class="tf-actions">
+      <a class="btn btn-secondary" href="{{ url_for('traffic.index') }}">刷新列表</a>
+    </div>
+  </div>
+
+  <div class="muted" style="margin-bottom:10px;">
+    📦 总数：<b>{{ total }}</b> ｜ 📄 第 <b>{{ page }}</b> / <b>{{ total_pages }}</b> 页
+  </div>
+
+  <div class="pager" style="justify-content:space-between;">
+    <div>
+      {% if page > 1 %}
+        <a class="btn btn-secondary" href="{{ url_for('traffic.index', page=page-1) }}">⬅ 上一页</a>
+      {% else %}
+        <button class="btn btn-secondary" disabled>⬅ 上一页</button>
+      {% endif %}
+    </div>
+
+    <div class="muted">每页：{{ page_size }} 条</div>
+
+    <div>
+      {% if page < total_pages %}
+        <a class="btn btn-secondary" href="{{ url_for('traffic.index', page=page+1) }}">下一页 ➡</a>
+      {% else %}
+        <button class="btn btn-secondary" disabled>下一页 ➡</button>
+      {% endif %}
     </div>
   </div>
 
   <div class="table-wrap" style="margin-top:12px;">
-    <table>
+    <table class="tf-table">
       <thead>
         <tr>
-          <th>ID</th>
-          <th>create_time</th>
-          <th>host_name</th>
-          <th>timestamp</th>
-          <th>src_ip</th>
-          <th>dst_ip</th>
-          <th>protocol</th>
-          <th>event_type</th>
+          <th style="width:70px;">ID</th>
+          <th style="width:180px;">create_time</th>
+          <th style="width:170px;">timestamp</th>
+          <th style="width:140px;">src_ip</th>
+          <th style="width:140px;">dst_ip</th>
+          <th style="width:90px;">protocol</th>
+          <th style="width:170px;">event_type</th>
           <th>description</th>
-          <th>操作</th>
+          <th style="width:90px;">操作</th>
         </tr>
       </thead>
-      <tbody id="tf-tbody">
-        <tr><td colspan="10">暂无数据。</td></tr>
+      <tbody>
+        {% if items and items|length %}
+          {% for it in items %}
+          <tr>
+            <td>{{ it.id }}</td>
+            <td>{{ it.create_time }}</td>
+            <td>{{ it.timestamp }}</td>
+            <td>{{ it.src_ip }}</td>
+            <td>{{ it.dst_ip }}</td>
+            <td>{{ it.protocol }}</td>
+            <td>{{ it.event_type }}</td>
+            <td>{{ it.description }}</td>
+            <td>
+              <a href="{{ url_for('traffic.detail_page', traffic_id=it.id) }}">详情</a>
+            </td>
+          </tr>
+          {% endfor %}
+        {% else %}
+          <tr><td colspan="9">暂无数据。你可以先在线抓包或上传 pcap 导入。</td></tr>
+        {% endif %}
       </tbody>
     </table>
-  </div>
-
-  <div class="pager">
-    <button class="btn" id="tf-prev">上一页</button>
-    <span id="tf-page">1</span>
-    <button class="btn" id="tf-next">下一页</button>
   </div>
 </div>
 
@@ -144,16 +243,13 @@
     status: "/traffic/api/live/status",
     start: "/traffic/api/live/start",
     stop: "/traffic/api/live/stop",
-    upload: "/traffic/api/upload",
-    recent: "/traffic/api/recent",
-    detail: "/traffic/api/detail/"
+    upload: "/traffic/api/upload"
   };
 
   const el = (id)=>document.getElementById(id);
 
   let pollTimer = null;
-  let page = 1;
-  let total = 0;
+  let busy = false; // 防重复点击
 
   function setStatus(text, level){
     const s = el("tf-status");
@@ -161,69 +257,6 @@
     s.classList.remove("ok","error");
     if(level==="ok") s.classList.add("ok");
     if(level==="error") s.classList.add("error");
-  }
-
-  async function refreshStatus(){
-    try{
-      const resp = await fetch(API.status);
-      const data = await resp.json();
-      if(!data.ok){ setStatus("状态获取失败", "error"); return; }
-
-      const running = !!data.running;
-      el("tf-start").disabled = running;
-      el("tf-stop").disabled = !running;
-
-      const c = data.counters || {};
-      setStatus(
-        `状态：${running ? "running" : "stopped"} | inserted=${c.inserted||0} skipped=${c.skipped||0} errors=${c.errors||0} dropped=${c.dropped||0} | iface=${data.iface||"-"} | bpf=${data.bpf||"-"} | host_name=${data.host_name||"-"}`,
-        running ? "ok" : "info"
-      );
-    }catch(e){
-      setStatus("状态获取异常：" + e, "error");
-    }
-  }
-
-  async function startCapture(){
-    const iface = (el("tf-iface").value || "").trim();
-    const bpf = (el("tf-bpf").value || "").trim();
-    const hostName = (el("tf-hostname").value || "").trim();
-    const flush = parseFloat(el("tf-flush").value || "1");
-    const enableAnalysis = el("tf-analysis").value === "1";
-
-    if(!iface){
-      alert("iface 必填：请粘贴 \\Device\\NPF_{...}");
-      return;
-    }
-
-    const payload = {
-      iface: iface,
-      bpf: bpf || null,
-      host_name: hostName || null,
-      flush_interval_sec: flush,
-      enable_analysis: enableAnalysis
-    };
-
-    const resp = await fetch(API.start, {
-      method:"POST",
-      headers: {"Content-Type":"application/json"},
-      body: JSON.stringify(payload)
-    });
-    const data = await resp.json();
-    if(!data.ok){
-      alert("启动失败：" + (data.error || "unknown"));
-      return;
-    }
-    await refreshStatus();
-  }
-
-  async function stopCapture(){
-    const resp = await fetch(API.stop, {method:"POST"});
-    const data = await resp.json();
-    if(!data.ok){
-      alert("停止失败：" + (data.error || "unknown"));
-      return;
-    }
-    await refreshStatus();
   }
 
   function setUploadMsg(text, level){
@@ -234,101 +267,159 @@
     if(level==="error") s.classList.add("error");
   }
 
-  async function uploadFile(){
-    const fileInput = el("tf-file");
-    if(!fileInput.files || !fileInput.files.length){
-      alert("请选择 pcap/pcapng 文件");
-      return;
+  async function refreshStatus(){
+    try{
+      const resp = await fetch(API.status);
+      const data = await resp.json();
+      if(!data.ok){
+        setStatus("状态获取失败", "error");
+        return;
+      }
+
+      const running = !!data.running;
+      const c = data.counters || {};
+
+      // 注意：busy 时不要让按钮状态被轮询打断（避免用户点了 start 立刻被 status 改回去）
+      if(!busy){
+        el("tf-start").disabled = running;
+        el("tf-stop").disabled = !running;
+      }
+
+      setStatus(
+        `状态：${running ? "RUNNING" : "STOPPED"} ｜ inserted=${c.inserted||0} skipped=${c.skipped||0} errors=${c.errors||0} dropped=${c.dropped||0}` +
+        (running ? ` ｜ iface=${data.iface||"-"} ｜ bpf=${data.bpf||"-"}` : ""),
+        running ? "ok" : "info"
+      );
+    }catch(e){
+      setStatus("状态获取异常：" + e, "error");
     }
-    const file = fileInput.files[0];
-    const hostName = (el("tf-upload-hostname").value || "").trim();
-    const enableAnalysis = el("tf-upload-analysis").value === "1";
-
-    const form = new FormData();
-    form.append("file", file);
-    form.append("host_name", hostName);
-    form.append("enable_analysis", enableAnalysis ? "1" : "0");
-
-    setUploadMsg("上传中...", "info");
-
-    const resp = await fetch(API.upload, {method:"POST", body: form});
-    const data = await resp.json();
-    if(!data.ok){
-      setUploadMsg("上传失败：" + (data.error || "unknown"), "error");
-      return;
-    }
-    const r = data.result || {};
-    setUploadMsg(`导入完成：inserted=${r.inserted||0} skipped=${r.skipped||0} errors=${r.errors||0} total_packets=${r.total_packets||0}`, "ok");
-    await loadRecent(true);
   }
 
-  async function loadRecent(reset){
-    if(reset) page = 1;
-    const hostName = (el("tf-filter-hostname").value || "").trim();
-    const pageSize = parseInt(el("tf-pagesize").value || "20", 10);
+  async function startCapture(){
+    if(busy) return;
+    busy = true;
 
-    const url = new URL(API.recent, window.location.origin);
-    url.searchParams.set("page", page);
-    url.searchParams.set("page_size", pageSize);
-    if(hostName) url.searchParams.set("host_name", hostName);
+    const startBtn = el("tf-start");
+    const stopBtn = el("tf-stop");
 
-    const resp = await fetch(url.toString());
-    const data = await resp.json();
-    if(!data.ok){
-      el("tf-tbody").innerHTML = `<tr><td colspan="10">加载失败</td></tr>`;
-      return;
-    }
-    total = data.total || 0;
-    el("tf-page").textContent = String(page);
+    // 立即反馈：按钮变暗 + 文案变化
+    startBtn.disabled = true;
+    stopBtn.disabled = true;
+    const oldText = startBtn.textContent;
+    startBtn.textContent = "启动中…";
 
-    const items = data.items || [];
-    if(!items.length){
-      el("tf-tbody").innerHTML = `<tr><td colspan="10">暂无数据</td></tr>`;
-      return;
-    }
+    try{
+      const iface = (el("tf-iface").value || "").trim();
+      const bpf = (el("tf-bpf").value || "").trim();
+      const hostName = (el("tf-hostname").value || "").trim();
+      const flush = parseFloat(el("tf-flush").value || "1");
+      const enableAnalysis = el("tf-analysis").value === "1";
 
-    el("tf-tbody").innerHTML = items.map(it => {
-      const desc = (it.description || "").toString();
-      const safeDesc = desc.length > 80 ? (desc.slice(0,80) + "...") : desc;
-      return `
-        <tr>
-          <td>${it.id}</td>
-          <td>${it.create_time || ""}</td>
-          <td>${it.host_name || ""}</td>
-          <td>${it.timestamp || ""}</td>
-          <td>${it.src_ip || ""}</td>
-          <td>${it.dst_ip || ""}</td>
-          <td>${it.protocol || ""}</td>
-          <td>${it.event_type || ""}</td>
-          <td title="${desc.replaceAll('"','&quot;')}">${safeDesc}</td>
-          <td><button class="btn" data-id="${it.id}">详情</button></td>
-        </tr>
-      `;
-    }).join("");
+      if(!iface){
+        alert("iface 必填：请粘贴 \\Device\\NPF_{...}");
+        return;
+      }
 
-    el("tf-tbody").querySelectorAll("button[data-id]").forEach(btn=>{
-      btn.addEventListener("click", async ()=>{
-        const id = btn.getAttribute("data-id");
-        const resp2 = await fetch(API.detail + encodeURIComponent(id));
-        const d2 = await resp2.json();
-        if(!d2.ok){
-          alert("详情获取失败");
-          return;
-        }
-        alert(JSON.stringify(d2.row.result, null, 2));
+      const payload = {
+        iface: iface,
+        bpf: bpf || null,
+        host_name: hostName || null,
+        flush_interval_sec: flush,
+        enable_analysis: enableAnalysis
+      };
+
+      const resp = await fetch(API.start, {
+        method:"POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify(payload)
       });
-    });
+      const data = await resp.json();
+      if(!data.ok){
+        alert("启动失败：" + (data.error || "unknown"));
+        return;
+      }
+    }finally{
+      startBtn.textContent = oldText;
+      busy = false;
+      await refreshStatus();
+    }
+  }
+
+  async function stopCapture(){
+    if(busy) return;
+    busy = true;
+
+    const startBtn = el("tf-start");
+    const stopBtn = el("tf-stop");
+
+    stopBtn.disabled = true;
+    startBtn.disabled = true;
+    const oldText = stopBtn.textContent;
+    stopBtn.textContent = "停止中…";
+
+    try{
+      const resp = await fetch(API.stop, {method:"POST"});
+      const data = await resp.json();
+      if(!data.ok){
+        alert("停止失败：" + (data.error || "unknown"));
+        return;
+      }
+    }finally{
+      stopBtn.textContent = oldText;
+      busy = false;
+      await refreshStatus();
+    }
+  }
+
+  async function uploadFile(){
+    if(busy) return;
+    busy = true;
+
+    const btn = el("tf-upload");
+    btn.disabled = true;
+    const oldText = btn.textContent;
+    btn.textContent = "上传中…";
+
+    try{
+      const fileInput = el("tf-file");
+      if(!fileInput.files || !fileInput.files.length){
+        alert("请选择 pcap/pcapng 文件");
+        return;
+      }
+      const file = fileInput.files[0];
+      const hostName = (el("tf-upload-hostname").value || "").trim();
+      const enableAnalysis = el("tf-upload-analysis").value === "1";
+
+      const form = new FormData();
+      form.append("file", file);
+      form.append("host_name", hostName);
+      form.append("enable_analysis", enableAnalysis ? "1" : "0");
+
+      setUploadMsg("上传中并解析入库…", "info");
+
+      const resp = await fetch(API.upload, {method:"POST", body: form});
+      const data = await resp.json();
+      if(!data.ok){
+        setUploadMsg("上传失败：" + (data.error || "unknown"), "error");
+        return;
+      }
+      const r = data.result || {};
+      setUploadMsg(`导入完成：inserted=${r.inserted||0} skipped=${r.skipped||0} errors=${r.errors||0} total_packets=${r.total_packets||0}`, "ok");
+
+      // 导入完成后刷新页面列表（最简单，和 logs 统一风格）
+      setTimeout(()=>{ window.location.href = "{{ url_for('traffic.index') }}"; }, 600);
+    }finally{
+      btn.textContent = oldText;
+      btn.disabled = false;
+      busy = false;
+    }
   }
 
   el("tf-start").addEventListener("click", startCapture);
   el("tf-stop").addEventListener("click", stopCapture);
   el("tf-upload").addEventListener("click", uploadFile);
-  el("tf-refresh").addEventListener("click", ()=>loadRecent(true));
-  el("tf-prev").addEventListener("click", ()=>{ if(page>1){ page--; loadRecent(false);} });
-  el("tf-next").addEventListener("click", ()=>{ page++; loadRecent(false); });
 
   refreshStatus();
-  loadRecent(true);
   pollTimer = setInterval(refreshStatus, 1000);
 })();
 </script>
