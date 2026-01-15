@@ -205,14 +205,13 @@ function pickReportIndex(i) {
 }
 
 async function analyze() {
-  const mockMode = $("chkMock").checked;
   const useCache = $("chkCache").checked;
 
   setStatus("分析中...");
   const resp = await fetch(window.__TRACEBACK_API__.analyze, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mock_mode: mockMode, use_cache: useCache })
+    body: JSON.stringify({ use_cache: useCache })
   });
   const data = await resp.json();
 
@@ -241,10 +240,9 @@ async function analyze() {
 }
 
 async function refreshHighAlerts() {
-  const mockMode = $("chkMock").checked;
   setStatus("加载列表中...");
 
-  const url = window.__TRACEBACK_API__.high_alerts + (mockMode ? "?mock_mode=1" : "?mock_mode=0");
+  const url = window.__TRACEBACK_API__.high_alerts;
   const resp = await fetch(url);
   const data = await resp.json();
 

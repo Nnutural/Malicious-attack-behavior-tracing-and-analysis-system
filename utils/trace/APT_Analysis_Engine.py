@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 class APTAnalysisEngine:
     def __init__(self, uri, user, password):
         self.driver = GraphDatabase.driver(uri, auth=(user, password))
-        vt_key = os.getenv("VT_API_KEY", "")
+        vt_key = os.getenv("VT_API_KEY", "ccccce76f24f200b35412471d447776e6cafd120c42cc2a44dc2ebd33f098532")
         self.ti_engine = VirusTotalEnricher(vt_key)
 
     def close(self):
@@ -125,11 +125,11 @@ class APTAnalysisEngine:
 
     def _trace_root_cause_and_infrastructure(self, root_event_id, victim_ip, all_events, root_timestamp):
         """
-        [整合优化] 同时执行基础设施提取 + 深度入侵点研判
+        [修改版] 在所有相关事件中寻找最早的进程链作为根因，而不仅限于第一个事件
         """
         event_ids = [e['id'] for e in all_events]
 
-        # 1. 基础设施提取查询
+        # 1. 基础设施提取 (保持不变)
         infra_query = """
         UNWIND $eids AS eid
         MATCH (ae:AttackEvent {id: eid})
@@ -144,14 +144,20 @@ class APTAnalysisEngine:
             collect(DISTINCT entity.hash) AS proc_hashes
         """
 
-        # 2. 基础 Root 进程查找查询
-        # 先找到攻击链起点的父进程，再把这个父进程丢给 _identify_initial_intrusion 去分析
+        # 2. [核心修改] 遍历所有事件，寻找最早的 Process 实体，并向上回溯
+        # 不再依赖 $root_id，而是使用 UNWIND $eids
         root_trace_query = """
-        MATCH (ae:AttackEvent {id: $root_id})<-[:TRIGGERED]-(entity:Process)
-        // 向上找父进程链，直到找不到父进程（即视野内的根）
+        UNWIND $eids AS eid
+        MATCH (ae:AttackEvent {id: eid})<-[:TRIGGERED]-(entity:Process)
+
+        // 向上找父进程链，直到找不到父进程
         MATCH path = (root:Process)-[:Spawn*0..5]->(entity)
         WHERE NOT (root)<-[:Spawn]-()
-        RETURN root.name AS root_name, root.pid AS root_pid, root.user AS user
+
+        // 返回结果，并按关联事件的时间排序，取最早的一个
+        RETURN root.name AS root_name, root.pid AS root_pid, root.user AS user, ae.timestamp_start AS ts
+        ORDER BY ts ASC
+        LIMIT 1
         """
 
         context = {
@@ -168,7 +174,7 @@ class APTAnalysisEngine:
                     "ips": [i for i in infra_res['ips'] if i],
                     "hashes": [h for h in infra_res['proc_hashes'] if h] + [h for h in infra_res['file_hashes'] if h]
                 }
-                # 情报富化
+                # 情报富化 (保持不变)
                 if context['infrastructure']['domains']:
                     try:
                         domain_info = self.ti_engine.get_domain_report(context['infrastructure']['domains'][0])
@@ -177,28 +183,28 @@ class APTAnalysisEngine:
                     except Exception:
                         pass
 
-            # 执行 Root 进程查找
-            root_res = session.run(root_trace_query, root_id=root_event_id).single()
+            # [修改] 传入 eids 列表而不是 root_id
+            root_res = session.run(root_trace_query, eids=event_ids).single()
 
             if root_res:
-                # [核心整合点] 找到根进程后，调用复杂的推断逻辑
                 root_name = root_res['root_name']
                 root_pid = root_res['root_pid']
+                # 使用该进程对应事件的时间，或者传入的整个场景开始时间
+                incident_time = root_res['ts'] or root_timestamp
 
                 logging.info(f"定位到根进程: {root_name} (PID: {root_pid})，开始深度研判...")
 
-                # 调用移植过来的深度分析函数
                 detailed_cause = self._identify_initial_intrusion(
                     victim_ip,
                     root_name,
                     root_pid,
-                    root_timestamp
+                    incident_time
                 )
                 context['root_cause'] = detailed_cause
             else:
                 context['root_cause'] = {
                     "type": "Unknown",
-                    "evidence": "No process chain found (Network-only event?)"
+                    "evidence": "No process chain found (Network-only or Credential-based event?)"
                 }
 
         return context

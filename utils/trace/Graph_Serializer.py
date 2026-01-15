@@ -64,51 +64,62 @@ class GraphSerializer:
     def get_scenario_topology(self, scenario_id):
         """
         【微观视图】展示底层的实体拓扑 (Process, File, IP)
-        对应前端需求：底层的实体拓扑图
+        修正：移除对 related 节点的 TRIGGERED 强校验，显示完整的上下文路径
+        修正：修复 unhashable type: 'dict' 错误，改用 ID 去重
         """
         query = """
         MATCH (ae:AttackEvent {scenario_id: $sid})
-        // 找到该攻击事件触发的所有实体
         MATCH (entity)-[:TRIGGERED]->(ae)
 
-        // 找到实体之间的底层关系 (1-2跳)
-        OPTIONAL MATCH path = (entity)-[:Spawn|Write|Read|Connect|Inject|Resolve|Load*1..2]-(related)
-        WHERE (related)-[:TRIGGERED]->(:AttackEvent {scenario_id: $sid})
+        // 1. 核心实体：触发了告警的节点
+        WITH collect(DISTINCT entity) AS core_entities
 
-        RETURN entity, path
+        // 2. 上下文扩展：查找与核心实体有直接关系的节点
+        UNWIND core_entities AS start_node
+        OPTIONAL MATCH path = (start_node)-[r:Spawn|Write|Read|Connect|Inject|Resolve|Load]-(related)
+
+        RETURN start_node AS entity, collect(path) AS paths
         """
 
         nodes = {}
-        edges = []
+        # 注意：这里我们不需要列表了，直接用字典 edges_map 来存，key 是边的 ID，天然去重
+        edges_map = {}
 
         with self.driver.session() as session:
             result = session.run(query, sid=scenario_id)
             for record in result:
-                # 处理起始实体
+                # 1. 处理核心告警实体
                 self._process_node(record['entity'], nodes)
 
-                # 处理路径
-                path = record['path']
-                if path:
-                    for rel in path.relationships:
-                        src = rel.start_node
-                        dst = rel.end_node
-                        self._process_node(src, nodes)
-                        self._process_node(dst, nodes)
+                # 2. 处理扩展路径
+                paths = record['paths']
+                if paths:
+                    for p in paths:
+                        for rel in p.relationships:
+                            src = rel.start_node
+                            dst = rel.end_node
 
-                        edge_key = f"{src['id']}_{rel.type}_{dst['id']}"
-                        edges.append({
-                            "id": edge_key,
-                            "from": src['id'],
-                            "to": dst['id'],
-                            "label": rel.type,
-                            "arrows": "to",
-                            "color": {"color": "#ff0000"} if rel.type in ['Inject', 'Connect'] else "#848484"
-                        })
+                            # 将关联的“背景节点”也加入节点列表
+                            self._process_node(src, nodes)
+                            self._process_node(dst, nodes)
 
-        # 去重边
-        unique_edges = [dict(t) for t in {tuple(d.items()) for d in edges}]
-        return {"nodes": list(nodes.values()), "edges": unique_edges}
+                            # 生成唯一的边 ID
+                            edge_key = f"{src['id']}_{rel.type}_{dst['id']}"
+
+                            # 直接用 ID 作为 key 存入字典，实现去重
+                            if edge_key not in edges_map:
+                                edges_map[edge_key] = {
+                                    "id": edge_key,
+                                    "from": src['id'],
+                                    "to": dst['id'],
+                                    "label": rel.type,
+                                    "arrows": "to",
+                                    # 字典结构在这里是允许的，因为我们不再用 set 去重了
+                                    "color": {"color": "#ff0000"} if rel.type in ['Inject', 'Connect'] else "#848484"
+                                }
+
+        # 将去重后的字典值转回列表
+        return {"nodes": list(nodes.values()), "edges": list(edges_map.values())}
 
     def _process_node(self, neo4j_node, nodes_dict):
         """辅助函数：处理 Neo4j 节点转 Vis.js 格式，包含样式配置"""
