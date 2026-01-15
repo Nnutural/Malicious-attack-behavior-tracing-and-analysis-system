@@ -12,7 +12,7 @@
     technique_name: "Brute Force"
   trigger:
     event_type: "user_logon_failed"
-    threshold: 5
+    threshold: 1     #5
   # 简单阈值逻辑通常在流计算引擎处理，此处假设单条高频失败日志或聚合结果
   description: "Detects multiple failed login attempts indicative of brute force."
 

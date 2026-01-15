@@ -15,9 +15,9 @@ STOP_FLAG = False
 
 def run_ingestion_cycle():
     # 1) SQL Server：改为 SecurityTraceDB（你现在已经在这个库建表了）
-    db_loader = SQLServerLoader("10.21.211.11,1433", "sa", "000000", "SecurityTraceDB")
+    db_loader = SQLServerLoader("10.21.226.213,1433", "sa", "123123", "SecurityTraceDB")  #10.21.226.213
 
-    mapper = ATTACKMapper("attack_rules.yaml")
+    mapper = ATTACKMapper(r"D:\大三上小学期\little_term\utils\trace\attack_rules.yaml")
     state_mgr = StateManager()
 
     neo4j_uri = "bolt://localhost:7687"
@@ -36,7 +36,7 @@ def run_ingestion_cycle():
 
         # HostBehaviors
         last_id = state_mgr.get_checkpoint("HostBehaviors")
-        behaviors, new_id = db_loader.fetch_new_data("HostBehaviorTable", last_id)
+        behaviors, new_id = db_loader.fetch_new_data("HostBehaviors", last_id)
 
         if behaviors:
             logging.info(f"读取到 {len(behaviors)} 条新主机行为数据")
@@ -52,7 +52,7 @@ def run_ingestion_cycle():
 
         # NetworkTraffic
         last_id_net = state_mgr.get_checkpoint("NetworkTraffic")
-        traffic_data, new_id_net = db_loader.fetch_new_data("NetworkTrafficTable", last_id_net)
+        traffic_data, new_id_net = db_loader.fetch_new_data("NetworkTraffic", last_id_net)
 
         if traffic_data:
             logging.info(f"读取到 {len(traffic_data)} 条新流量数据")
@@ -66,7 +66,32 @@ def run_ingestion_cycle():
 
             state_mgr.update_checkpoint("NetworkTraffic", new_id_net)
 
-        # HostLogs（你后续可以补：db_loader.fetch_new_data("HostLogs", ...) + graph_engine.ingest_host_log）
+        # HostLogs
+        # 1. 获取断点
+        last_id_logs = state_mgr.get_checkpoint("HostLogs")
+
+        # 2. 读取数据 (注意变量名改为 new_id_logs)
+        log_data, new_id_logs = db_loader.fetch_new_data("HostLogs", last_id_logs)
+
+        if log_data:
+            logging.info(f"读取到 {len(log_data)} 条主机日志数据")
+
+            # 3. 实体入库 (生成 User 和 IP 节点)
+            graph_engine.ingest_host_log(log_data)
+
+            # 4. 规则匹配
+            detected_attacks = []
+            for event in log_data:
+                # 注意：Attck_Map 需要能为日志生成正确的 ID (如 HostIP_Username)
+                matches = mapper.analyze_event(event)
+                detected_attacks.extend(matches)
+
+            # 5. 告警入库
+            if detected_attacks:
+                graph_engine.ingest_attack_events(detected_attacks)
+
+            # 6. 更新断点 (使用正确的变量名)
+            state_mgr.update_checkpoint("HostLogs", new_id_logs)
 
         # build chains
         graph_engine.build_causal_chains(time_window_seconds=7200)

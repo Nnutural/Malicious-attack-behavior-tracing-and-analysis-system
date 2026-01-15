@@ -4,7 +4,7 @@ from __future__ import annotations
 from flask import Blueprint, jsonify, render_template, request
 
 from utils.trace.service.traceback_service import TracebackService
-from utils.trace.service.mock_report import get_mock_high_alerts, get_mock_report
+
 
 bp = Blueprint("traceback", __name__)
 svc = TracebackService()
@@ -17,11 +17,6 @@ def index():
 
 @bp.route("/api/high_alerts", methods=["GET"])
 def api_high_alerts():
-    # mock_mode=1 时强制走 mock
-    mock_mode = (request.args.get("mock_mode") or "").strip() in ("1", "true", "True")
-    if mock_mode:
-        return jsonify({"ok": True, "mode": "mock", "items": get_mock_high_alerts()})
-
     try:
         items = svc.get_high_alerts()
         return jsonify({"ok": True, "mode": "real", "items": items})
@@ -35,9 +30,6 @@ def api_analyze():
     payload = request.get_json(silent=True) or {}
     mock_mode = bool(payload.get("mock_mode", True))  # 没 neo4j 时默认 true
     use_cache = bool(payload.get("use_cache", True))
-
-    if mock_mode:
-        return jsonify({"ok": True, "mode": "mock", "report": get_mock_report()})
 
     try:
         report = svc.analyze_full(use_cache=use_cache)

@@ -8,7 +8,7 @@ class Config:
 
     # ========== SQL Server 连接串（给 pyodbc/dbutils 用）==========
     DB_DRIVER = os.environ.get("DB_DRIVER") or "ODBC Driver 17 for SQL Server"
-    DB_SERVER = os.environ.get("DB_SERVER") or "localhost,1433"
+    DB_SERVER = os.environ.get("DB_SERVER") or "10.21.226.213,1433"  #10.21.226.213  10.21.211.11
     DB_DATABASE = os.environ.get("DB_DATABASE") or "SecurityTraceDB"
     DB_USERNAME = os.environ.get("DB_USERNAME") or "sa"
     DB_PASSWORD = os.environ.get("DB_PASSWORD") or "123123"
