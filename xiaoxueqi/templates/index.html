@@ -2,156 +2,436 @@
 
 {% block title %}主页 - 攻击溯源分析系统{% endblock %}
 
+{% block extra_css %}
+<style>
+  /* =========================================================
+     Home / Landing (static) - v2
+     设计目标：
+     - 不用“黑色大渐变横幅”，整体更柔和、干净、协调
+     - 不做你不喜欢的“左右分栏大块布局”
+     - 保持静态（不依赖数据库）
+     - 风格尽量贴近你现有 traceback.css：白底、浅灰边框、圆角、简洁按钮
+     ========================================================= */
+
+  :root{
+    --bg: #f6f7fb;
+    --card: #ffffff;
+    --text: #111827;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --shadow: 0 8px 24px rgba(17,24,39,.06);
+
+    --primary: #111;        /* 跟 traceback 按钮一致 */
+    --primary-2: #2563eb;   /* 轻量点缀 */
+  }
+
+  .home-wrap{
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 14px 16px 28px;
+  }
+
+  /* 页面背景容器：浅灰底 + 白卡片 */
+  .home-bg{
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 14px;
+  }
+
+  /* 顶部标题区：不做深色横幅，做“白卡片 + 微弱点缀” */
+  .hero{
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 18px;
+    box-shadow: var(--shadow);
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before{
+    content:"";
+    position:absolute;
+    inset:-2px;
+    background:
+      radial-gradient(520px 240px at 12% 10%, rgba(37,99,235,.10), rgba(37,99,235,0) 60%),
+      radial-gradient(520px 240px at 86% 0%, rgba(99,102,241,.08), rgba(99,102,241,0) 55%);
+    pointer-events:none;
+  }
+  .hero > *{ position: relative; }
+
+  .hero h1{
+    margin: 0 0 10px 0;
+    font-size: 28px;
+    letter-spacing: .2px;
+    color: var(--text);
+  }
+  .hero p{
+    margin: 0;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.8;
+    max-width: 980px;
+  }
+
+  .hero-actions{
+    display:flex;
+    flex-wrap:wrap;
+    gap: 10px;
+    margin-top: 14px;
+  }
+
+  .btn{
+    border: 1px solid var(--border);
+    background: #fff;
+    color: var(--text);
+    padding: 9px 12px;
+    border-radius: 12px;
+    font-size: 13px;
+    text-decoration:none;
+    cursor:pointer;
+    user-select:none;
+    display:inline-flex;
+    align-items:center;
+    gap: 8px;
+  }
+  .btn:hover{ background:#f9fafb; }
+
+  .btn-primary{
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+    font-weight: 700;
+  }
+  .btn-primary:hover{ background:#222; border-color:#222; }
+
+  .btn-accent{
+    background: rgba(37,99,235,.10);
+    border-color: rgba(37,99,235,.18);
+    color: #1d4ed8;
+    font-weight: 700;
+  }
+  .btn-accent:hover{ background: rgba(37,99,235,.14); }
+
+  /* 小标签行 */
+  .pill-row{
+    display:flex;
+    flex-wrap:wrap;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .pill{
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: #fff;
+    font-size: 12px;
+    color: #374151;
+  }
+
+  /* 通用 section */
+  .section{
+    margin-top: 12px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 14px;
+    box-shadow: var(--shadow);
+  }
+  .section-title{
+    display:flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap:wrap;
+    margin-bottom: 10px;
+  }
+  .section-title h2{
+    margin: 0;
+    font-size: 15px;
+    letter-spacing: .2px;
+    color: var(--text);
+  }
+  .muted{ color: var(--muted); font-size: 12px; }
+
+  /* 快速入口：网格按钮 */
+  .quick-grid{
+    display:grid;
+    grid-template-columns: repeat(6, minmax(140px, 1fr));
+    gap: 10px;
+  }
+  .quick{
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 10px 12px;
+    background:#fff;
+    text-decoration:none;
+    color: var(--text);
+    transition: transform .08s ease, background .08s ease, border-color .08s ease;
+  }
+  .quick:hover{
+    background:#fafafa;
+    border-color:#dfe3ea;
+    transform: translateY(-1px);
+  }
+  .quick .k{ font-weight: 800; font-size: 13px; margin-bottom: 4px; }
+  .quick .v{ color: var(--muted); font-size: 12px; }
+
+  /* 模块卡片：3列 */
+  .card-grid{
+    display:grid;
+    grid-template-columns: repeat(3, minmax(220px, 1fr));
+    gap: 12px;
+  }
+  .card{
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 12px;
+    background: linear-gradient(180deg, #fff 0%, #fbfbfb 100%);
+  }
+  .card .t{
+    font-weight: 900;
+    margin-bottom: 6px;
+    color: var(--text);
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap: 10px;
+  }
+  .badge{
+    font-size: 12px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background:#fff;
+    color:#111;
+    white-space:nowrap;
+  }
+  .card .d{
+    color:#374151;
+    font-size: 13px;
+    line-height: 1.7;
+  }
+  .chip-row{ display:flex; flex-wrap:wrap; gap: 8px; margin-top: 10px; }
+  .chip{
+    font-size: 12px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background:#fff;
+    color:#111;
+  }
+
+  /* 流程：不做“超大四列”，改成更像产品的步骤条 */
+  .steps{
+    display:grid;
+    grid-template-columns: repeat(4, minmax(210px, 1fr));
+    gap: 10px;
+  }
+  .step{
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 12px;
+    background:#fff;
+    position: relative;
+    overflow:hidden;
+  }
+  .step::before{
+    content:"";
+    position:absolute;
+    inset:0;
+    background: radial-gradient(420px 160px at 12% 0%, rgba(37,99,235,.08), rgba(37,99,235,0));
+    pointer-events:none;
+  }
+  .step > *{ position: relative; }
+  .step .num{
+    width: 28px;
+    height: 28px;
+    border-radius: 10px;
+    background: var(--primary);
+    color: #fff;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-weight: 900;
+    font-size: 13px;
+    margin-bottom: 8px;
+  }
+  .step .t{ font-weight: 900; margin-bottom: 6px; color: var(--text); }
+  .step .d{ color:#374151; font-size: 13px; line-height: 1.7; }
+
+  /* 小提示框 */
+  .note{
+    border: 1px dashed #d1d5db;
+    background: #fff;
+    border-radius: 14px;
+    padding: 10px 12px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.7;
+  }
+
+  @media (max-width: 1100px){
+    .quick-grid{ grid-template-columns: repeat(3, minmax(140px, 1fr)); }
+    .card-grid{ grid-template-columns: repeat(2, minmax(220px, 1fr)); }
+    .steps{ grid-template-columns: repeat(2, minmax(210px, 1fr)); }
+  }
+  @media (max-width: 520px){
+    .home-wrap{ padding: 12px; }
+    .home-bg{ padding: 12px; }
+    .quick-grid{ grid-template-columns: 1fr; }
+    .card-grid{ grid-template-columns: 1fr; }
+    .steps{ grid-template-columns: 1fr; }
+    .hero h1{ font-size: 22px; }
+  }
+</style>
+{% endblock %}
+
 {% block content %}
+<div class="home-wrap">
+  <div class="home-bg">
 
-<!-- 顶部介绍区 -->
-<div class="card hero">
-  <div>
-    <h1 class="hero-title">恶意攻击行为溯源分析系统</h1>
-    <p class="muted" style="margin-top:8px;">
-      本系统面向内网真实攻防场景，融合 <strong>主机日志</strong>、<strong>主机行为</strong> 与 <strong>网络流量</strong> 等多源数据，
-      通过时间对齐与关联分析，识别攻击链各阶段，并输出可解释的溯源结果（攻击路径、关键节点、C2 线索与归因建议）。
-    </p>
+    <!-- 顶部：简洁白卡片 -->
+    <div class="hero">
+      <h1>恶意攻击行为溯源分析系统</h1>
+      <p>
+        本系统面向内网真实攻防场景，融合 <b>主机日志</b>、<b>主机行为</b> 与 <b>网络流量</b> 等多源数据，
+        通过时间对齐与关联分析，重建攻击链路并输出可解释的溯源结果（路径、关键证据、C2 线索与归因建议）。
+      </p>
 
-    <div class="btn-row" style="margin-top:14px;">
-      <a class="btn" href="{{ url_for('dashboard.index') }}">进入仪表盘</a>
-      <a class="btn btn-secondary" href="{{ url_for('logs.list_logs') }}">日志分析</a>
-      <a class="btn btn-secondary" href="{{ url_for('behavior.index') }}">行为分析</a>
-      <a class="btn btn-secondary" href="{{ url_for('traffic.index') }}">流量分析</a>
-      <a class="btn btn-secondary" href="{{ url_for('attack.index') }}">攻击链</a>
-      <a class="btn btn-secondary" href="{{ url_for('traceback.index') }}">溯源分析</a>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="{{ url_for('dashboard.index') }}">进入仪表盘</a>
+        <a class="btn btn-accent" href="{{ url_for('traceback.index') }}">溯源分析</a>
+        <a class="btn" href="{{ url_for('attack.index') }}">攻击链</a>
+        <a class="btn" href="{{ url_for('logs.list_logs') }}">日志分析</a>
+      </div>
+
+      <div class="pill-row">
+        <span class="pill">ATT&CK 映射</span>
+        <span class="pill">多源时间线关联</span>
+        <span class="pill">实体关系图（Neo4j）</span>
+        <span class="pill">路径重建</span>
+        <span class="pill">C2 / IOC 线索</span>
+        <span class="pill">APT 相似性匹配</span>
+      </div>
     </div>
 
-    <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
-      <span class="badge info">ATT&CK 映射</span>
-      <span class="badge info">多源时间线关联</span>
-      <span class="badge info">实体关系图</span>
-      <span class="badge info">攻击路径重建</span>
-      <span class="badge info">C2 线索分析</span>
-      <span class="badge info">APT 相似性匹配</span>
+    <!-- 快速入口 -->
+    <div class="section">
+      <div class="section-title">
+        <h2>快速入口</h2>
+        <div class="muted">建议演示顺序：仪表盘 → 攻击链 → 溯源分析</div>
+      </div>
+
+      <div class="quick-grid">
+        <a class="quick" href="{{ url_for('dashboard.index') }}">
+          <div class="k">仪表盘</div>
+          <div class="v">全局统计 / 最近报告</div>
+        </a>
+        <a class="quick" href="{{ url_for('logs.list_logs') }}">
+          <div class="k">日志分析</div>
+          <div class="v">HostLogs 入库与详情</div>
+        </a>
+        <a class="quick" href="{{ url_for('behavior.index') }}">
+          <div class="k">行为分析</div>
+          <div class="v">HostBehaviors 展示</div>
+        </a>
+        <a class="quick" href="{{ url_for('traffic.index') }}">
+          <div class="k">流量分析</div>
+          <div class="v">NetworkTraffic 展示</div>
+        </a>
+        <a class="quick" href="{{ url_for('attack.index') }}">
+          <div class="k">攻击链</div>
+          <div class="v">ATT&CK + 图谱联动</div>
+        </a>
+        <a class="quick" href="{{ url_for('traceback.index') }}">
+          <div class="k">溯源分析</div>
+          <div class="v">路径 / IOC / AI 报告</div>
+        </a>
+      </div>
     </div>
-  </div>
 
-  <div class="hero-aside">
-    <div class="kpi">
-      <div class="kpi-title">本次演示（最小闭环）</div>
-      <ul class="kpi-list">
-        <li>导入/展示样例数据（日志 / 行为 / 流量）</li>
-        <li>按照时间窗口聚合事件，生成攻击时间线</li>
-        <li>映射 ATT&CK 技术与战术阶段</li>
-        <li>生成溯源结果页（路径 + 画像 + C2）</li>
-      </ul>
+    <!-- 系统模块 -->
+    <div class="section">
+      <div class="section-title">
+        <h2>系统模块</h2>
+        <div class="muted">静态说明，不依赖数据库实时状态</div>
+      </div>
+
+      <div class="card-grid">
+        <div class="card">
+          <div class="t">主机日志（HostLogs） <span class="badge">SQL Server</span></div>
+          <div class="d">
+            归一化 Windows Event Log / 安全日志，提取用户、源 IP、会话等实体，为暴力破解、身份溯源提供证据基础。
+          </div>
+          <div class="chip-row">
+            <span class="chip">范式解析</span>
+            <span class="chip">实体抽取</span>
+            <span class="chip">会话重建</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="t">主机行为（HostBehaviors） <span class="badge">Agent 上报</span></div>
+          <div class="d">
+            聚焦进程树与文件/注册表/网络行为链，支撑“执行→持久化→提权”的可解释路径还原。
+          </div>
+          <div class="chip-row">
+            <span class="chip">进程树</span>
+            <span class="chip">敏感文件</span>
+            <span class="chip">注入检测</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="t">网络流量（NetworkTraffic） <span class="badge">Traffic</span></div>
+          <div class="d">
+            识别异常协议行为、DNS/ICMP 隧道与外传线索，为 C2/归因提供基础设施证据。
+          </div>
+          <div class="chip-row">
+            <span class="chip">会话重建</span>
+            <span class="chip">隧道检测</span>
+            <span class="chip">IOC 关联</span>
+          </div>
+        </div>
+      </div>
     </div>
 
-    <div class="kpi" style="margin-top:12px;">
-      <div class="kpi-title">系统特点</div>
-      <ul class="kpi-list">
-        <li>结构清晰：蓝图分模块，页面统一布局</li>
-        <li>可扩展：后续可对接真实采集与检测规则</li>
-        <li>可解释：每个结论可追溯到原始证据</li>
-      </ul>
+    <!-- 流程 -->
+    <div class="section">
+      <div class="section-title">
+        <h2>分析流程（可解释溯源）</h2>
+        <div class="muted">每一步都能回溯到证据</div>
+      </div>
+
+      <div class="steps">
+        <div class="step">
+          <div class="num">1</div>
+          <div class="t">采集与入库</div>
+          <div class="d">多源数据进入 SQL Server：HostLogs / HostBehaviors / NetworkTraffic。</div>
+        </div>
+        <div class="step">
+          <div class="num">2</div>
+          <div class="t">规则检测</div>
+          <div class="d">ATT&CK 规则映射触发 AttackEvent，并将证据实体写入 Neo4j。</div>
+        </div>
+        <div class="step">
+          <div class="num">3</div>
+          <div class="t">关联与构图</div>
+          <div class="d">构建实体拓扑与阶段因果链（NEXT_STAGE），形成攻击路径。</div>
+        </div>
+        <div class="step">
+          <div class="num">4</div>
+          <div class="t">溯源输出</div>
+          <div class="d">生成 AttackReports（SQL）：路径 + IOC + 归因结果，并支持 AI 研判报告。</div>
+        </div>
+      </div>
+
+      <div style="margin-top:12px;" class="note">
+        提示：本首页保持“静态展示”，不会读取数据库；真正的动态数据请到「仪表盘」查看。
+      </div>
     </div>
+
   </div>
 </div>
-
-<!-- 功能模块说明 -->
-<div class="grid" style="margin-top:14px;">
-  <div class="card">
-    <h3>主机日志（Host Logs）</h3>
-    <p class="muted">
-      汇总 Windows/Linux/安全设备等日志。后续将支持：日志范式化、实体提取（用户/IP/进程/文件/注册表）、登录会话重建、
-      异常登录识别与基于规则的初步告警。
-    </p>
-    <p style="margin-top:10px;">
-      典型输入：事件日志（4624/4625）、Sysmon、SSH 登录、Web 访问日志等。
-    </p>
-  </div>
-
-  <div class="card">
-    <h3>主机行为（Host Behavior）</h3>
-    <p class="muted">
-      关注进程链与文件操作链。后续将支持：进程树构建、可疑命令行检测、敏感文件访问识别、
-      可疑父子进程模式（如 Office → Powershell）提示等。
-    </p>
-    <p style="margin-top:10px;">
-      典型输出：进程链路图、关键行为时间线、可疑行为摘要。
-    </p>
-  </div>
-
-  <div class="card">
-    <h3>网络流量（Network Traffic）</h3>
-    <p class="muted">
-      通过会话重建与流量特征统计，辅助识别横向移动、外连 C2、数据外传等行为。
-      后续将支持：会话聚合（五元组）、异常端口/协议、DNS 隧道迹象等检测。
-    </p>
-    <p style="margin-top:10px;">
-      典型输入：pcap、NetFlow、Zeek/Suricata 输出等。
-    </p>
-  </div>
-</div>
-
-<!-- 分析与溯源流程 -->
-<div class="card" style="margin-top:14px;">
-  <h3>分析流程（可解释溯源）</h3>
-  <p class="muted">
-    系统采用“多源融合 → 关联分析 → ATT&CK 映射 → 溯源输出”的流程。每一步都保留证据链接，确保结论可复现。
-  </p>
-
-  <div class="table-wrap" style="margin-top:10px;">
-    <table>
-      <thead>
-        <tr>
-          <th>阶段</th>
-          <th>目标</th>
-          <th>输入</th>
-          <th>输出</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>采集与清洗</td>
-          <td>统一格式与时间轴</td>
-          <td>日志 / 行为 / 流量</td>
-          <td>统一事件范式、实体列表</td>
-        </tr>
-        <tr>
-          <td>关联分析</td>
-          <td>找出同一攻击活动的事件集合</td>
-          <td>统一事件 + 时间窗口</td>
-          <td>聚合事件簇、关键因果链</td>
-        </tr>
-        <tr>
-          <td>ATT&CK 映射</td>
-          <td>识别攻击链阶段与技术</td>
-          <td>事件簇 + 技术库/规则</td>
-          <td>战术阶段、技术 ID、统计</td>
-        </tr>
-        <tr>
-          <td>溯源输出</td>
-          <td>重建路径、提取画像与线索</td>
-          <td>攻击链 + 实体关系</td>
-          <td>攻击路径、C2、归因建议</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-</div>
-
-<!-- 演示提示与使用说明 -->
-<div class="card" style="margin-top:14px;">
-  <h3>快速使用说明</h3>
-  <ul style="margin:10px 0 0; padding-left:18px;">
-    <li><strong>仪表盘：</strong>查看全局统计与最新攻击事件摘要。</li>
-    <li><strong>日志分析：</strong>查看原始日志、定位关键事件并进入详情页。</li>
-    <li><strong>行为分析：</strong>查看进程链/文件操作的可视化占位（后续接入）。</li>
-    <li><strong>流量分析：</strong>查看网络会话与外联线索的占位展示（后续接入）。</li>
-    <li><strong>攻击链：</strong>展示 ATT&CK 映射与阶段划分（后续接入规则/算法）。</li>
-    <li><strong>溯源分析：</strong>最终溯源结果呈现：路径 + 画像 + C2 + 归因建议。</li>
-  </ul>
-
-  <p class="muted" style="margin-top:10px;">
-    提示：当前页面内容为展示用的“框架与占位”，后续你们只需要把数据接口与页面渲染填进去即可完成演示闭环。
-  </p>
-</div>
-
 {% endblock %}

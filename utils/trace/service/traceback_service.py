@@ -13,7 +13,7 @@ from typing import Any
 from utils.trace.Graph_Serializer import GraphSerializer
 from utils.trace.service.attack_reports_store import get_latest_attack_reports, parse_report_json
 
-NEO4J_URI = "bolt://localhost:7687"
+NEO4J_URI = "bolt://10.21.211.11:7687"
 NEO4J_USER = "neo4j"
 NEO4J_PASSWORD = "00000000"
 
