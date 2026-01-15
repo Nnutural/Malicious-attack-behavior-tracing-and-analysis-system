@@ -304,38 +304,44 @@ class GraphIngestionEngine:
         # 使用 CALL { ... } IN TRANSACTIONS OF 1000 ROWS 避免内存溢出
         # 注意：这需要 Neo4j 4.4+
         chain_query = """
-        MATCH (a1:AttackEvent), (a2:AttackEvent)
-        WHERE a1.victim_ip = a2.victim_ip
-          AND a1.id <> a2.id
-          AND datetime(a1.timestamp_end) <= datetime(a2.timestamp_start)
-          AND duration.inSeconds(datetime(a1.timestamp_end), datetime(a2.timestamp_start)).seconds < $window
-          AND NOT (a1)-[:NEXT_STAGE]->(a2)
+                MATCH (a1:AttackEvent), (a2:AttackEvent)
+                WHERE a1.victim_ip = a2.victim_ip
+                  AND a1.id <> a2.id
+                  AND datetime(a1.timestamp_start) > datetime() - duration('P1D') 
+                  AND datetime(a2.timestamp_start) > datetime() - duration('P1D')
+                  AND datetime(a1.timestamp_end) <= datetime(a2.timestamp_start)
+                  AND duration.inSeconds(datetime(a1.timestamp_end), datetime(a2.timestamp_start)).seconds < $window
+                  AND NOT (a1)-[:NEXT_STAGE]->(a2)
 
-        CALL {
-            WITH a1, a2
-            MERGE (a1)-[r:NEXT_STAGE]->(a2)
-            SET r.type = 'temporal', r.confidence = 'Low'
-        } IN TRANSACTIONS OF 1000 ROWS
-        """
+                CALL {
+                    WITH a1, a2
+                    MERGE (a1)-[r:NEXT_STAGE]->(a2)
+                    SET r.type = 'temporal', r.confidence = 'Low'
+                } IN TRANSACTIONS OF 100 ROWS
+                """
         self._run_massive_update(chain_query, window=600)
         logging.info(f"已分批处理 {len(attack_data_list)} 条 ATT&CK 事件并更新时序链")
 
     def build_causal_chains(self, time_window_seconds=7200, max_hops=10):
         logging.info("开始执行因果关联分析...")
 
-        # [关键修复] 同样使用 IN TRANSACTIONS 分批提交
+        # [优化修复] 降低最短路径深度，减小 Batch Size
         causal_query = """
         MATCH (a1:AttackEvent)
         MATCH (a2:AttackEvent)
         WHERE a1.victim_ip = a2.victim_ip
           AND a1.attack_id <> a2.attack_id
+          AND datetime(a1.timestamp_start) > datetime() - duration('P1D')
+          AND datetime(a2.timestamp_start) > datetime() - duration('P1D')
           AND datetime(a1.timestamp_end) <= datetime(a2.timestamp_start)
           AND duration.inSeconds(datetime(a1.timestamp_end), datetime(a2.timestamp_start)).seconds < $window
 
         MATCH (e1)-[:TRIGGERED]->(a1)
         MATCH (e2)-[:TRIGGERED]->(a2)
         WITH a1, a2, e1, e2
-        MATCH path = shortestPath((e1)-[:Spawn|Write|Read|Inject|Connect|Resolve|Load*1..15]-(e2))
+
+        // 关键优化：将最大深度从 15 降为 6，大幅降低内存占用
+        MATCH path = shortestPath((e1)-[:Spawn|Write|Read|Inject|Connect|Resolve|Load*1..6]-(e2))
 
         CALL {
             WITH a1, a2, path
@@ -344,7 +350,7 @@ class GraphIngestionEngine:
                 r.confidence = 'High',
                 r.path_length = length(path),
                 r.time_gap = duration.inSeconds(datetime(a1.timestamp_end), datetime(a2.timestamp_start)).seconds
-        } IN TRANSACTIONS OF 500 ROWS
+        } IN TRANSACTIONS OF 100 ROWS
         """
 
         self._run_massive_update(causal_query, window=time_window_seconds)
