@@ -7,7 +7,6 @@ class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY') or 'dev-secret-key-for-traceback-system'
 
     # ========== SQL Server 连接串（给 pyodbc/dbutils 用）==========
-    # 你也可以通过环境变量覆盖（更安全）
     DB_DRIVER = os.environ.get("DB_DRIVER") or "ODBC Driver 17 for SQL Server"
     DB_SERVER = os.environ.get("DB_SERVER") or "10.21.226.213,1433"  #10.21.226.213  10.21.211.11
     DB_DATABASE = os.environ.get("DB_DATABASE") or "SecurityTraceDB"
@@ -35,12 +34,16 @@ class Config:
             "TrustServerCertificate=yes;"
         )
 
-    # 下面 SQLAlchemy 的配置你当前用不到，可以先留空或保留原样（避免别处引用报错）
     SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') or ''
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
     UPLOAD_FOLDER = 'data/uploads'
     MAX_CONTENT_LENGTH = 100 * 1024 * 1024  # 100MB
+
+    # ===== 新增：dumpcap + 在线抓包临时文件目录 =====
+    # 可通过环境变量覆盖
+    DUMPCAP_PATH = os.environ.get("DUMPCAP_PATH") or r"C:\Program Files\Wireshark\dumpcap.exe"
+    LIVE_CAPTURE_DIR = os.environ.get("LIVE_CAPTURE_DIR") or "data/live_captures"
 
     TIME_WINDOW = 300
     ATTCK_THRESHOLD = 0.7

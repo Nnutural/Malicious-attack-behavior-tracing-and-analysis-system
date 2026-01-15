@@ -8,10 +8,11 @@ import ipaddress
 import platform
 import subprocess
 
-from flask import Blueprint, abort, current_app, flash, redirect, render_template, request, session, url_for
+from flask import Blueprint, abort, current_app, flash, jsonify, redirect, render_template, request, session, url_for
 
 from config import Config
 from utils.winlog.service.hostlogs_ingest import ingest_windows_eventlog_to_sqlserver
+from utils.winlog.service.logontracer_jobs import LOGONTRACER_JOBS
 from utils.winlog.storage.hostlogs_sqlserver import (
     count_hostlogs,
     get_hostlog_by_id,
@@ -19,8 +20,10 @@ from utils.winlog.storage.hostlogs_sqlserver import (
     list_hostlogs,
     parse_result_json,
 )
+from utils.winlog.time_sync import DEFAULT_TIME_SYNC_PORT, TIME_SERVICE_MANAGER, TIME_SYNC_MANAGER
 
 bp = Blueprint("logs", __name__)
+api_bp = Blueprint("logontracer_api", __name__)
 logger = logging.getLogger(__name__)
 
 PAGE_SIZE = 20
@@ -196,6 +199,9 @@ def list_logs():
     except Exception as exc:
         _get_logger().warning("读取 host_name 下拉列表失败: %s", exc)
 
+    time_service_status = TIME_SERVICE_MANAGER.status()
+    time_sync_status = TIME_SYNC_MANAGER.status()
+
     return render_template(
         "logs.html",
         logs=logs,
@@ -204,6 +210,25 @@ def list_logs():
         total_pages=total_pages,
         db_server=db_server,
         host_name=host_name,
+        host_names=host_names,
+        time_service_status=time_service_status,
+        time_sync_status=time_sync_status,
+        time_sync_default_port=DEFAULT_TIME_SYNC_PORT,
+    )
+
+
+@bp.route("/logontracer", methods=["GET"])
+def logontracer_page():
+    db_server = _get_db_server()
+    conn_str = _get_conn_str()
+    host_names = []
+    try:
+        host_names = list_distinct_host_names(limit=200, conn_str=conn_str)
+    except Exception as exc:
+        _get_logger().warning("读取 host_name 下拉列表失败: %s", exc)
+    return render_template(
+        "logontracer.html",
+        db_server=db_server,
         host_names=host_names,
     )
 
@@ -233,6 +258,168 @@ def collect():
     if host_name:
         return redirect(url_for("logs.list_logs", host_name=host_name))
     return redirect(url_for("logs.list_logs"))
+
+
+@bp.route("/time_sync/service/start", methods=["POST"])
+def start_time_sync_service():
+    TIME_SERVICE_MANAGER.start()
+    host_name = (request.form.get("host_name") or "").strip()
+    if host_name:
+        return redirect(url_for("logs.list_logs", host_name=host_name))
+    return redirect(url_for("logs.list_logs"))
+
+
+@bp.route("/time_sync/service/status", methods=["GET"])
+def time_sync_service_status():
+    return jsonify(TIME_SERVICE_MANAGER.status())
+
+
+@bp.route("/time_sync/client/start", methods=["POST"])
+def start_time_sync_client():
+    payload = request.get_json(silent=True) or {}
+    target_ip = (payload.get("target_ip") or request.form.get("target_ip") or "").strip()
+    port_value = payload.get("port") or request.form.get("port")
+    port = DEFAULT_TIME_SYNC_PORT
+    if port_value is not None and str(port_value).strip():
+        try:
+            port = int(str(port_value).strip())
+        except ValueError:
+            return jsonify({"started": False, "message": "端口无效"}), 400
+    status = TIME_SYNC_MANAGER.start_one_shot_sync(target_ip=target_ip, port=port)
+    return jsonify(status)
+
+
+@bp.route("/time_sync/client/status", methods=["GET"])
+def time_sync_client_status():
+    return jsonify(TIME_SYNC_MANAGER.status())
+
+
+@api_bp.route("/logontracer/start", methods=["POST"])
+def logontracer_start():
+    payload = request.get_json(silent=True) or {}
+    raw_hosts = payload.get("host_names", payload.get("host_name"))
+    host_names: list[str] | None = None
+    if isinstance(raw_hosts, list):
+        host_names = [str(item).strip() for item in raw_hosts if str(item).strip()]
+        if not host_names:
+            host_names = None
+    elif raw_hosts:
+        host_names = [str(raw_hosts).strip()]
+    params = {
+        "start": payload.get("start"),
+        "end": payload.get("end"),
+        "user": payload.get("user"),
+        "src_ip": payload.get("src_ip"),
+        "host_names": host_names,
+        "bucket": payload.get("bucket"),
+    }
+    conn_str = _get_conn_str()
+    job_id = LOGONTRACER_JOBS.start_job(params=params, conn_str=conn_str)
+    return jsonify({"job_id": job_id})
+
+
+@api_bp.route("/logontracer/job/<job_id>", methods=["GET"])
+def logontracer_job(job_id: str):
+    status = LOGONTRACER_JOBS.get_status(job_id)
+    if not status:
+        return jsonify({"status": "error", "message": "job not found"}), 404
+    result_ready = status.get("status") == "done"
+    response = {
+        "status": status.get("status"),
+        "progress": status.get("progress"),
+        "message": status.get("message"),
+        "result_ready": result_ready,
+    }
+    if result_ready:
+        response["result_refs"] = {
+            "graph_url": url_for("logontracer_api.logontracer_graph", job_id=job_id),
+            "timeline_url": url_for("logontracer_api.logontracer_timeline", job_id=job_id),
+            "sessions_url": url_for("logontracer_api.logontracer_sessions", job_id=job_id),
+        }
+    return jsonify(response)
+
+
+@api_bp.route("/logontracer/graph", methods=["GET"])
+def logontracer_graph():
+    job_id = (request.args.get("job_id") or "").strip()
+    if not job_id:
+        return jsonify({"message": "job_id required"}), 400
+    graph = LOGONTRACER_JOBS.get_graph(job_id)
+    if graph is None:
+        return jsonify({"message": "result not ready"}), 409
+    return jsonify(graph)
+
+
+@api_bp.route("/logontracer/timeline", methods=["GET"])
+def logontracer_timeline():
+    job_id = (request.args.get("job_id") or "").strip()
+    if not job_id:
+        return jsonify({"message": "job_id required"}), 400
+    timeline = LOGONTRACER_JOBS.get_timeline(job_id)
+    if timeline is None:
+        return jsonify({"message": "result not ready"}), 409
+    return jsonify(timeline)
+
+
+@api_bp.route("/logontracer/sessions", methods=["GET"])
+def logontracer_sessions():
+    job_id = (request.args.get("job_id") or "").strip()
+    if not job_id:
+        return jsonify({"message": "job_id required"}), 400
+    draw = request.args.get("draw", "1")
+    start = request.args.get("start", "0")
+    length = request.args.get("length", "10")
+    try:
+        draw_int = int(draw)
+    except ValueError:
+        draw_int = 1
+    try:
+        start_int = max(int(start), 0)
+    except ValueError:
+        start_int = 0
+    try:
+        length_int = max(int(length), 10)
+    except ValueError:
+        length_int = 10
+
+    search_value = request.args.get("search[value]", "")
+    data = LOGONTRACER_JOBS.get_sessions(
+        job_id=job_id,
+        start=start_int,
+        length=length_int,
+        search_value=search_value,
+    )
+    if data is None:
+        return jsonify({"message": "result not ready"}), 409
+    return jsonify(
+        {
+            "draw": draw_int,
+            "recordsTotal": data["recordsTotal"],
+            "recordsFiltered": data["recordsFiltered"],
+            "data": data["data"],
+        }
+    )
+
+
+@api_bp.route("/logontracer/session_events", methods=["GET"])
+def logontracer_session_events():
+    job_id = (request.args.get("job_id") or "").strip()
+    host_ip = (request.args.get("host_ip") or "").strip()
+    session_id = (request.args.get("session_id") or "").strip()
+    if not job_id or not host_ip or not session_id:
+        return jsonify({"message": "job_id/host_ip/session_id required"}), 400
+    start_time = request.args.get("start_time")
+    end_time = request.args.get("end_time")
+    events = LOGONTRACER_JOBS.get_session_events(
+        job_id=job_id,
+        host_ip=host_ip,
+        session_id=session_id,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    if events is None:
+        return jsonify({"message": "result not ready"}), 409
+    return jsonify({"events": events})
 
 
 @bp.route("/<int:log_id>", methods=["GET"])

@@ -208,7 +208,10 @@ main.page{
 }
 
 /* 表格：行高更舒服 */
-.table-wrap{ overflow:auto; }
+.table-wrap{
+  overflow:auto;
+  overflow-x: auto;
+}
 table{
   width:100%;
   border-collapse: collapse;
