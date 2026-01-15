@@ -4,7 +4,7 @@
 
 /* 关键：让页面内容居中且左右边距一致 */
 .tb-page{
-  max-width: 1800px;  /* 更宽一点，图不显得窄 */
+  max-width: 1700px;  /* 更宽一点，图不显得窄 */
   margin: 0 auto;     /* 居中 */
   padding: 12px 18px; /* 左右边距一致 */
 }
@@ -220,8 +220,52 @@
 .dot-ip { background:#ddeeff; border:1px solid #6699ff; }
 .dot-domain { background:#e6f7ff; border:1px solid #00a3cc; }
 
+/* =========================================================
+   [新增修复] AI 研判报告区域：防止长行撑破右侧边界
+   - 关键：对长 token（hash/url/base64/json）强制断行
+   - 同时兼容 Markdown 渲染出的 pre/code/a 等标签
+   ========================================================= */
+#aiReportBox{
+  max-width: 100%;
+  overflow-x: auto;              /* 兜底：实在不能断行就横向滚动 */
+  overflow-wrap: anywhere;       /* 允许在任意位置断行（最关键） */
+  word-break: break-word;        /* 兼容旧浏览器 */
+  line-break: anywhere;
+}
+
+/* Markdown 中常见的 code/pre：既要保留格式又不能把布局撑破 */
+#aiReportBox pre{
+  max-width: 100%;
+  overflow-x: auto;              /* 代码块允许横向滚动 */
+  white-space: pre-wrap;         /* 同时允许换行（比 pre 更不容易溢出） */
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* 行内 code 也可能出现长 hash */
+#aiReportBox code{
+  max-width: 100%;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* 超长链接（IOC 域名/URL）允许断行 */
+#aiReportBox a{
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+
+/* 列表/段落兜底 */
+#aiReportBox p,
+#aiReportBox li{
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 /* 小屏适配 */
-@media (max-width: 1200px){
+@media (max-width: 1100px){
   .tb-page{ max-width: 100%; padding: 12px; }
   .tb-layout{ grid-template-columns: 1fr; }
   .tb-left{ position: static; }
