@@ -57,12 +57,18 @@ class APTAnalysisEngine:
             # 4. 相似度匹配 (Similarity Matching)
             match_result = self._match_known_apts(attack_signature['ttp_set'])
 
-            # 5. 结果处理与闭环
+            # 5. 结果处理
             if match_result['is_match']:
-                logging.info(f"场景 {scenario['scenario_id']} 匹配到已知组织: {match_result['best_match']}")
-                profile_type = "Known APT"
+                # 如果匹配到了（无论是已知APT还是历史未知组织）
+                logging.info(f"场景匹配成功: {match_result['best_match']} ({match_result['match_type']})")
+                profile_type = match_result['match_type']  # 使用返回的类型 (Known APT 或 Suspected Group)
+
+                # 即使匹配到了 Suspected Group，也可以选择更新一下它的 last_seen
+                if profile_type == 'Suspected Group':
+                    self._save_new_attacker_profile(attack_signature, trace_context)
+
             else:
-                logging.info(f"场景 {scenario['scenario_id']} 未匹配已知组织，生成新画像")
+                logging.info(f"场景未匹配，生成新画像")
                 profile_type = "Unknown Actor"
                 self._save_new_attacker_profile(attack_signature, trace_context)
 
@@ -328,14 +334,23 @@ class APTAnalysisEngine:
 
     def _match_known_apts(self, detected_ttps):
         """
-        [相似度计算] 计算 Jaccard 系数匹配已知 APT 组织
+        [增强版] 同时匹配“已知MITRE组织”和“历史记录的未知组织”
         """
+        # 修改点：使用 UNION ALL 同时查询两类节点
         query = """
+        // 1. 查已知组织 (IntrusionSet)
         MATCH (is:IntrusionSet)-[:USES]->(t:Technique)
-        RETURN is.id AS group_name, collect(t.id) AS group_ttps
+        RETURN is.id AS group_name, 'Known APT' AS type, collect(t.id) AS group_ttps
+
+        UNION ALL
+
+        // 2. 查历史记录的未知组织 (AttackerProfile)
+        MATCH (ap:AttackerProfile)-[:USES]->(t:Technique)
+        RETURN ap.id AS group_name, 'Suspected Group' AS type, collect(t.id) AS group_ttps
         """
 
         best_match = None
+        match_type = "Unknown"
         max_score = 0.0
         details = []
 
@@ -344,30 +359,37 @@ class APTAnalysisEngine:
 
             for record in results:
                 group_name = record['group_name']
+                group_type = record['type']
                 group_ttps = set(record['group_ttps'])
 
+                # Jaccard 相似度计算
                 intersection = len(detected_ttps.intersection(group_ttps))
                 union = len(detected_ttps.union(group_ttps))
 
                 if union == 0: continue
                 score = intersection / union
 
+                # 记录候选者
                 if score > 0.1:
                     details.append({
                         "group": group_name,
+                        "type": group_type,
                         "score": round(score, 3),
                         "overlap": list(detected_ttps.intersection(group_ttps))
                     })
 
+                # 更新最佳匹配
                 if score > max_score:
                     max_score = score
                     best_match = group_name
+                    match_type = group_type
 
-        is_match = max_score > 0.2
+        is_match = max_score > 0.2  # 阈值
 
         return {
             "is_match": is_match,
             "best_match": best_match,
+            "match_type": match_type,  # 新增字段，告诉前端是 Known APT 还是 历史记录
             "confidence_score": max_score,
             "candidates": sorted(details, key=lambda x: x['score'], reverse=True)[:3]
         }

@@ -97,6 +97,55 @@
     condition_extra: "file_extension in ['jsp', 'php', 'asp', 'aspx']" 
   description: "Detects creation of web shell scripts."
 
+- rule_id: "HB_005_SensitiveFileAccess"
+  data_source: "host_behavior"
+  attack_mapping:
+    tactic_id: "TA0006"
+    tactic_name: "Credential Access"
+    technique_id: "T1003.008"
+    technique_name: "OS Credential Dumping: /etc/passwd and /etc/shadow"
+  trigger:
+    event_type: "file_read"
+    behavior_features:
+      is_sensitive_path: true  # 需在预处理提取: /etc/shadow, /etc/passwd, /etc/master.passwd
+  description: "Detects reading of sensitive system credential files."
+
+- rule_id: "HB_006_SuspiciousFileExec"
+  data_source: "host_behavior"
+  attack_mapping:
+    tactic_id: "TA0002"
+    tactic_name: "Execution"
+    technique_id: "T1059.004"
+    technique_name: "Command and Scripting Interpreter: Unix Shell"
+  trigger:
+    event_type: "file_change_permission"  # 或 process_create
+    condition_extra: "file_path startswith '/tmp/' AND ('chmod' in command_line OR '+x' in command_line)"
+  description: "Detects executable permission setting in temporary directories."
+
+- rule_id: "HB_007_DiscoveryCommands"
+  data_source: "host_behavior"
+  attack_mapping:
+    tactic_id: "TA0007"
+    tactic_name: "Discovery"
+    technique_id: "T1082"
+    technique_name: "System Information Discovery"
+  trigger:
+    event_type: "process_create"
+    condition_extra: "process_name in ['whoami', 'id', 'ifconfig', 'ip', 'netstat', 'uname']"
+    threshold: 3  # 短时间内执行3次以上
+  description: "Detects rapid execution of system discovery commands."
+
+- rule_id: "HB_008_CronPersistence"
+  data_source: "host_behavior"
+  attack_mapping:
+    tactic_id: "TA0003"
+    tactic_name: "Persistence"
+    technique_id: "T1053.003"
+    technique_name: "Scheduled Task/Job: Cron"
+  trigger:
+    event_type: "file_modify"
+    condition_extra: "file_path contains '/var/spool/cron/' OR file_path contains '/etc/cron.d/'"
+  description: "Detects modification of cron jobs for persistence."
 # -----------------------------------------------------------------------------
 # 3. 网络流量规则 (Network Traffic Rules)
 # 对应题目功能：隐蔽信道检测、数据外传检测、C2基础设施关联
