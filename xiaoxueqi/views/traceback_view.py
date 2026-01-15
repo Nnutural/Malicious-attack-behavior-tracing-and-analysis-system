@@ -4,7 +4,7 @@ from __future__ import annotations
 from flask import Blueprint, jsonify, render_template, request
 
 from utils.trace.service.traceback_service import TracebackService
-
+from utils.trace.LLM_Reporter import LLMReporter
 
 bp = Blueprint("traceback", __name__)
 svc = TracebackService()
@@ -41,3 +41,26 @@ def api_analyze():
         return jsonify({"ok": True, "mode": "real", "report": enriched})
     except Exception as exc:
         return jsonify({"ok": False, "mode": "real", "error": str(exc)}), 500
+
+
+llm_reporter = LLMReporter()  # 实例化
+
+
+@bp.route("/api/generate_report_ai", methods=["POST"])
+def api_generate_report_ai():
+    """
+    新接口：接收前端传来的 report_item JSON，交给 AI 润色
+    """
+    try:
+        payload = request.get_json(silent=True) or {}
+        report_data = payload.get("report_data")
+
+        if not report_data:
+            return jsonify({"ok": False, "error": "No data provided"}), 400
+
+        # 调用 AI 生成
+        markdown_text = llm_reporter.generate_narrative_report(report_data)
+
+        return jsonify({"ok": True, "data": markdown_text})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500

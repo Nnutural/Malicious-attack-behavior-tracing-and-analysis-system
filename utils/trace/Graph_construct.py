@@ -18,42 +18,34 @@ class GraphIngestionEngine:
 
     # =========================================================================
     # [优化 1] 通用分批写入工具
-    # 解决 "Transaction failed ... allocation" 内存溢出问题
     # =========================================================================
     def _batch_execute(self, query, data_list, batch_size=1000, param_name="events", **kwargs):
         """
-        :param query: Cypher 语句 (必须配合 UNWIND $param_name AS item 使用)
+        :param query: Cypher 语句
         :param data_list: 数据列表
         :param batch_size: 单次事务提交的条数
         :param param_name: Cypher 中 UNWIND 后面的参数名
-        :param kwargs: 其他固定参数
         """
         if not data_list:
             return
 
         total = len(data_list)
-        # 显式使用 session，并在循环中开启独立事务
         with self.driver.session() as session:
             for i in range(0, total, batch_size):
                 batch = data_list[i: i + batch_size]
                 try:
-                    # 构造参数字典
                     params = {param_name: batch}
                     params.update(kwargs)
-                    # 每一个 batch 是一个独立的事务
                     session.execute_write(lambda tx: tx.run(query, **params))
                 except Exception as e:
                     logging.error(f"批量写入失败 (Range {i}-{i + len(batch)}): {e}")
 
     # =========================================================================
-    # [优化 2] 大规模更新查询工具
-    # 针对 MATCH (a), (b) ... MERGE 这种全库扫描操作，使用 auto-commit 模式
-    # 并配合 Cypher 的 CALL { ... } IN TRANSACTIONS (Neo4j 4.4+)
+    # [优化 2] 大规模更新查询工具 (auto-commit)
     # =========================================================================
     def _run_massive_update(self, query, **kwargs):
         """
         运行包含 CALL { ... } IN TRANSACTIONS 的大查询
-        注意：这类查询不能包裹在显式事务中，必须使用 session.run 直接运行
         """
         try:
             with self.driver.session() as session:
@@ -98,12 +90,11 @@ class GraphIngestionEngine:
                 "proc_name": entities.get("process_name"),
                 "proc_hash": entities.get("hash"),
                 "proc_id": proc_id,
-                # 预计算 parent_id 方便 Cypher 处理
                 "parent_id": f"{item.get('host_ip')}_{entities.get('parent_pid')}_unknown" if item.get(
                     "event_type") == "process_create" else None
             })
 
-        # 1. 进程创建 (分批写入)
+        # 1. 进程创建
         spawn_query = """
         UNWIND $events AS event
         WITH event WHERE event.event_type = 'process_create' AND event.pid IS NOT NULL
@@ -120,7 +111,7 @@ class GraphIngestionEngine:
         spawn_data = [d for d in processed_data if d["event_type"] == "process_create"]
         self._batch_execute(spawn_query, spawn_data, param_name="events")
 
-        # 2. 文件操作 (分批写入)
+        # 2. 文件操作
         file_ops_map = {
             "file_create": "Write", "file_modify": "Write",
             "file_delete": "Delete", "file_read": "Read", "image_load": "Load"
@@ -140,7 +131,7 @@ class GraphIngestionEngine:
             batch_data = [d for d in processed_data if d["event_type"] == evt_type and d["entities"].get("file_path")]
             self._batch_execute(file_query, batch_data, param_name="events")
 
-        # 3. 注册表操作 (分批写入)
+        # 3. 注册表操作
         reg_query = """
         UNWIND $events AS event
         WITH event
@@ -155,7 +146,7 @@ class GraphIngestionEngine:
         reg_data = [d for d in processed_data if d["event_type"] == "registry_set_value"]
         self._batch_execute(reg_query, reg_data, param_name="events")
 
-        # 4. 网络连接 (分批写入)
+        # 4. 网络连接
         net_conn_query = """
         UNWIND $events AS event
         WITH event
@@ -169,7 +160,7 @@ class GraphIngestionEngine:
                     d["event_type"] == "network_connection" and d["entities"].get("dst_ip")]
         self._batch_execute(net_conn_query, net_data, param_name="events")
 
-        # 5. 进程注入 (分批写入)
+        # 5. 进程注入
         inject_query = """
         UNWIND $events AS event
         WITH event
@@ -203,7 +194,7 @@ class GraphIngestionEngine:
                 "features": item.get("traffic_features", {})
             })
 
-        # 1. 流量 (分批)
+        # 1. 流量
         flow_query = """
         UNWIND $events AS event
         WITH event WHERE event.src_ip IS NOT NULL AND event.dst_ip IS NOT NULL
@@ -218,7 +209,7 @@ class GraphIngestionEngine:
         """
         self._batch_execute(flow_query, processed_data, param_name="events")
 
-        # 2. DNS (分批)
+        # 2. DNS
         dns_query = """
         UNWIND $events AS event
         WITH event WHERE event.domain IS NOT NULL
@@ -262,8 +253,7 @@ class GraphIngestionEngine:
         if not attack_data_list:
             return
 
-        # 1. 基础关联入库 (分批)
-        # 注意：这里参数名原代码是 batch，现在统一用 batch 参数名传入 _batch_execute
+        # 1. 基础关联入库
         ingest_query = """
         UNWIND $batch AS data
         MERGE (t:Technique {id: data.technique.id})
@@ -301,20 +291,25 @@ class GraphIngestionEngine:
         self._batch_execute(ingest_query, attack_data_list, param_name="batch")
 
         # 2. [关键修复] 构建时序链 (NEXT_STAGE)
-        # 使用 CALL { ... } IN TRANSACTIONS OF 1000 ROWS 避免内存溢出
-        # 注意：这需要 Neo4j 4.4+
+        # 修复逻辑：增加 ID 比较以打破时间相同导致的死循环
         chain_query = """
                 MATCH (a1:AttackEvent), (a2:AttackEvent)
                 WHERE a1.victim_ip = a2.victim_ip
                   AND a1.id <> a2.id
                   AND datetime(a1.timestamp_start) > datetime() - duration('P1D') 
                   AND datetime(a2.timestamp_start) > datetime() - duration('P1D')
-                  AND datetime(a1.timestamp_end) <= datetime(a2.timestamp_start)
+
+                  // FIX: 防止毫秒级并发导致的双向连接（死循环）
+                  AND (
+                      datetime(a1.timestamp_end) < datetime(a2.timestamp_start)
+                      OR 
+                      (datetime(a1.timestamp_end) = datetime(a2.timestamp_start) AND a1.id < a2.id)
+                  )
+
                   AND duration.inSeconds(datetime(a1.timestamp_end), datetime(a2.timestamp_start)).seconds < $window
                   AND NOT (a1)-[:NEXT_STAGE]->(a2)
 
-                CALL {
-                    WITH a1, a2
+                CALL (a1, a2) {
                     MERGE (a1)-[r:NEXT_STAGE]->(a2)
                     SET r.type = 'temporal', r.confidence = 'Low'
                 } IN TRANSACTIONS OF 100 ROWS
@@ -325,7 +320,7 @@ class GraphIngestionEngine:
     def build_causal_chains(self, time_window_seconds=7200, max_hops=10):
         logging.info("开始执行因果关联分析...")
 
-        # [优化修复] 降低最短路径深度，减小 Batch Size
+        # [优化修复] 降低最短路径深度，减小 Batch Size，防止死循环
         causal_query = """
         MATCH (a1:AttackEvent)
         MATCH (a2:AttackEvent)
@@ -333,7 +328,14 @@ class GraphIngestionEngine:
           AND a1.attack_id <> a2.attack_id
           AND datetime(a1.timestamp_start) > datetime() - duration('P1D')
           AND datetime(a2.timestamp_start) > datetime() - duration('P1D')
-          AND datetime(a1.timestamp_end) <= datetime(a2.timestamp_start)
+
+          // FIX: 防止死循环
+          AND (
+              datetime(a1.timestamp_end) < datetime(a2.timestamp_start)
+              OR 
+              (datetime(a1.timestamp_end) = datetime(a2.timestamp_start) AND a1.id < a2.id)
+          )
+
           AND duration.inSeconds(datetime(a1.timestamp_end), datetime(a2.timestamp_start)).seconds < $window
 
         MATCH (e1)-[:TRIGGERED]->(a1)
@@ -343,8 +345,7 @@ class GraphIngestionEngine:
         // 关键优化：将最大深度从 15 降为 6，大幅降低内存占用
         MATCH path = shortestPath((e1)-[:Spawn|Write|Read|Inject|Connect|Resolve|Load*1..6]-(e2))
 
-        CALL {
-            WITH a1, a2, path
+        CALL (a1, a2, path) {
             MERGE (a1)-[r:NEXT_STAGE]->(a2)
             SET r.type = 'causal',
                 r.confidence = 'High',
