@@ -3,45 +3,76 @@
 {% block title %}流量分析 - 攻击溯源分析系统{% endblock %}
 
 {% block content %}
+
 <div class="page-head">
   <div class="page-head-row">
     <div>
       <h2>网络流量分析</h2>
-      <p class="muted" style="margin:0;">
-        在线抓包支持 Npcap/WinPcap 网卡设备名（Windows 下通常是 <code>\Device\NPF_{...}</code>）。
-        离线导入支持 <code>.pcap / .pcapng</code>，入库到 <code>dbo.NetworkTraffic</code>。
+      <p class="muted">
+        在线抓包使用 <b>dumpcap</b> 子进程写入 pcapng 文件，停止后自动解析并入库（更稳定，适合演示）。
       </p>
     </div>
   </div>
 </div>
 
 <style>
-  /* 只针对 traffic 页面做一点局部优化，避免影响全局 */
-  .tf-card-title{ display:flex; align-items:baseline; gap:10px; margin-bottom:10px; }
-  .tf-card-title h3{ margin:0; }
-  .tf-hint{ font-size:12px; color: var(--muted); line-height:1.55; margin:0; }
-
-  .tf-form{
-    display:grid;
-    grid-template-columns: 1.4fr 1fr 0.8fr 140px 160px auto;
+  /* ===== traffic 页面局部增强（避免影响其他页面） ===== */
+  .tf-card-title{
+    display:flex;
+    align-items:baseline;
+    justify-content:space-between;
     gap:12px;
-    align-items:end;
+    flex-wrap:wrap;
+    margin-bottom:10px;
   }
-  @media (max-width: 1100px){
-    .tf-form{ grid-template-columns: 1fr 1fr; }
+  .tf-hint{
+    font-size:12px;
+    color: var(--muted);
+    line-height:1.55;
+    margin:0;
   }
 
-  .tf-field{ display:flex; flex-direction:column; gap:6px; }
-  .tf-field label{ font-size:12px; color:#4b5563; font-weight:700; }
-  .tf-field input, .tf-field select{
-    border:1px solid var(--border);
+  .tf-toolbar{
+    display:flex;
+    flex-wrap:wrap;
+    gap:12px;
+    align-items:flex-end;
+  }
+  .tf-field{
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+    min-width: 220px;
+  }
+  .tf-field.wide{ min-width: 420px; }
+  .tf-field.small{ min-width: 180px; }
+
+  .tf-field label{
+    font-size:12px;
+    color:#4b5563;
+    font-weight:700;
+  }
+  .tf-field input,
+  .tf-field select{
+    border:1px solid #e5e7eb;
     border-radius:10px;
     padding:9px 10px;
     font-size:14px;
     background:#fff;
   }
+  .tf-field .help{
+    font-size:12px;
+    color:#64748b;
+    margin-top:2px;
+  }
 
-  .tf-actions{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; justify-content:flex-end; }
+  .tf-actions{
+    display:flex;
+    gap:10px;
+    align-items:center;
+    flex-wrap:wrap;
+    justify-content:flex-end;
+  }
 
   .tf-status{
     width:100%;
@@ -58,146 +89,184 @@
   .tf-status.ok{ border-color:#86efac; background:#ecfdf3; color:#065f46; }
   .tf-status.error{ border-color:#fecaca; background:#fff1f2; color:#7f1d1d; }
 
-  /* 按钮“变暗”反馈 */
-  .btn[disabled]{ opacity:.55; cursor:not-allowed; filter: grayscale(0.2); }
-
-  /* 列表固定布局，尽量不左右滚动 */
+  /* 表格：避免重叠 + 上下居中 */
   .tf-table{
     table-layout: fixed;
   }
-  .tf-table th, .tf-table td{
-    white-space: normal;     /* 允许换行 */
-    overflow: hidden;
-    text-overflow: ellipsis; /* 太长截断 */
-    vertical-align: top;
+  .tf-table th,
+  .tf-table td{
+    vertical-align: middle !important;
   }
+  .tf-table td{
+    white-space: normal !important;     /* 允许换行，避免挤压重叠 */
+    word-break: break-word;
+  }
+  .tf-ellipsis{
+    display: -webkit-box;
+    -webkit-line-clamp: 2;        /* description 最多显示 2 行，避免表格过高 */
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  /* 详情按钮更像产品 */
+  .btn-link{
+    display:inline-block;
+    padding:7px 10px;
+    border-radius:10px;
+    border:1px solid var(--border);
+    background:#fff;
+    color:#111;
+    font-size:13px;
+    line-height:1.2;
+    text-decoration:none;
+    white-space:nowrap;
+  }
+  .btn-link.primary{
+    background: var(--primary);
+    border-color: var(--primary);
+    color:#fff;
+  }
+  .btn-link:hover{ background:#f5f5f5; text-decoration:none; }
+  .btn-link.primary:hover{ background:#2559c7; border-color:#2559c7; }
+
+  /* traffic 页表格容器：强制不重叠（允许横向滚动做兜底） */
+  .tf-table-wrap{ overflow-x:auto; }
 </style>
 
 <div class="card">
   <div class="tf-card-title">
-    <h3>在线抓包</h3>
-    <p class="tf-hint">
-      建议管理员权限运行 Flask。示例 iface：<code>\Device\NPF_{FDE60FA6-C939-4031-9313-4FB8EF4F595B}</code>（VMnet1）。
-      BPF 示例：<code>net 192.168.86.0/24</code> / <code>port 53</code> / <code>host 192.168.86.131</code>
-    </p>
+    <div>
+      <h3 style="margin:0;">在线抓包（dumpcap）</h3>
+      <p class="tf-hint">
+        仅在“停止并导入入库”时进行解析与分析。BPF 示例：<code>net 192.168.86.0/24</code> / <code>host 192.168.86.131</code> / <code>icmp</code>
+      </p>
+    </div>
   </div>
 
-  <div class="tf-form">
-    <div class="tf-field">
-      <label for="tf-iface">网卡 iface（必填）</label>
-      <input id="tf-iface" type="text" placeholder="\Device\NPF_{...}">
+  <div class="tf-toolbar">
+    <div class="tf-field wide">
+      <label>网卡 iface（必填）</label>
+      <input id="tf-iface" type="text" placeholder="\Device\NPF_{FDE60FA6-C939-4031-9313-4FB8EF4F595B}">
+      <div class="help">Windows 下常见格式：<code>\Device\NPF_{...}</code>（例如 VMnet1）。</div>
     </div>
 
-    <div class="tf-field">
-      <label for="tf-bpf">过滤规则 BPF（可空）</label>
+    <div class="tf-field wide">
+      <label>BPF（可空）</label>
       <input id="tf-bpf" type="text" placeholder="net 192.168.86.0/24">
+      <div class="help">可用于减少抓包量。留空表示不过滤。</div>
     </div>
 
-    <div class="tf-field">
-      <label for="tf-hostname">采集点 host_name（可选）</label>
+    <div class="tf-field small">
+      <label>host_name（可选）</label>
       <input id="tf-hostname" type="text" placeholder="VMnet1 / sensor-1">
+      <div class="help">入库标记采集点，不在列表展示。</div>
     </div>
 
-    <div class="tf-field">
-      <label for="tf-flush">写库 flush(s)</label>
-      <select id="tf-flush">
-        <option value="0.5">0.5</option>
-        <option value="1" selected>1</option>
-        <option value="2">2</option>
-        <option value="5">5</option>
-      </select>
-    </div>
-
-    <div class="tf-field">
-      <label for="tf-analysis">分析开关</label>
+    <div class="tf-field small">
+      <label>分析开关</label>
       <select id="tf-analysis">
-        <option value="1" selected>启用（会话/异常/隐蔽信道）</option>
-        <option value="0">关闭（仅入库）</option>
+        <option value="1" selected>启用（停止后导入并分析）</option>
+        <option value="0">关闭（停止后仅导入）</option>
       </select>
+      <div class="help">启用后会写入 detections/anomalies 等结构化字段。</div>
     </div>
 
-    <div class="tf-actions">
+    <div class="tf-field wide">
+      <label>dumpcap_path（可空）</label>
+      <input id="tf-dumpcap" type="text" placeholder="默认: Config.DUMPCAP_PATH">
+      <div class="help">默认：<code>{{ config.get('DUMPCAP_PATH', 'C:\\Program Files\\Wireshark\\dumpcap.exe') }}</code></div>
+    </div>
+
+    <div class="tf-actions" style="margin-left:auto;">
       <button class="btn" id="tf-start">开始捕获</button>
-      <button class="btn btn-secondary" id="tf-stop" disabled>停止捕获</button>
+      <button class="btn btn-secondary" id="tf-stop" disabled>停止并导入入库</button>
     </div>
   </div>
 
   <div id="tf-status" class="tf-status">状态：unknown</div>
+  <div id="tf-import" class="tf-status" style="display:none;"></div>
 </div>
 
 <div class="card" style="margin-top:14px;">
   <div class="tf-card-title">
-    <h3>离线导入（pcap / pcapng）</h3>
-    <p class="tf-hint">
-      上传后会解析并写入数据库。适合快速造数或离线复现。
-    </p>
+    <div>
+      <h3 style="margin:0;">离线导入（pcap / pcapng）</h3>
+      <p class="tf-hint">上传后立即解析并写入数据库（NetworkTraffic）。</p>
+    </div>
   </div>
 
-  <div class="tf-form" style="grid-template-columns: 1.6fr 0.8fr 200px auto;">
-    <div class="tf-field">
-      <label for="tf-file">选择文件</label>
+  <div class="tf-toolbar">
+    <div class="tf-field wide">
+      <label>选择文件</label>
       <input id="tf-file" type="file" accept=".pcap,.pcapng,.cap">
     </div>
 
-    <div class="tf-field">
-      <label for="tf-upload-hostname">host_name（可选）</label>
+    <div class="tf-field small">
+      <label>host_name（可选）</label>
       <input id="tf-upload-hostname" type="text" placeholder="pcap_import">
     </div>
 
-    <div class="tf-field">
-      <label for="tf-upload-analysis">分析开关</label>
+    <div class="tf-field small">
+      <label>分析</label>
       <select id="tf-upload-analysis">
         <option value="1" selected>启用</option>
         <option value="0">关闭</option>
       </select>
     </div>
 
-    <div class="tf-actions" style="justify-content:flex-end;">
+    <div class="tf-actions" style="margin-left:auto;">
       <button class="btn" id="tf-upload">上传并导入</button>
     </div>
   </div>
 
-  <div id="tf-upload-msg" class="tf-status" style="margin-top:10px;">等待上传。</div>
+  <div id="tf-upload-msg" class="tf-status">等待上传。</div>
 </div>
 
 <div class="card" style="margin-top:14px;">
-  <div class="page-head-row" style="margin-bottom:10px;">
+  <div class="tf-card-title">
     <div>
       <h3 style="margin:0;">最近流量</h3>
-      <p class="tf-hint" style="margin-top:6px;">
-        列表固定布局不左右滚动；点击“详情”查看 result/content。
-      </p>
+      <p class="tf-hint">支持按 event_type 筛选：仅告警 / DNS 隧道 / ICMP 隧道等。</p>
     </div>
+  </div>
+
+  <form method="get" action="{{ url_for('traffic.index') }}" class="tf-toolbar">
+    <div class="tf-field small">
+      <label for="event_type">event_type 筛选</label>
+      <select id="event_type" name="event_type">
+        {% for opt in event_type_options %}
+          <option value="{{ opt.value }}" {% if (event_type or '') == opt.value %}selected{% endif %}>{{ opt.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
     <div class="tf-actions">
-      <a class="btn btn-secondary" href="{{ url_for('traffic.index') }}">刷新列表</a>
+      <button class="btn btn-secondary" type="submit">筛选</button>
+      <a class="btn-link" href="{{ url_for('traffic.index') }}">清除</a>
     </div>
-  </div>
+  </form>
 
-  <div class="muted" style="margin-bottom:10px;">
+  <p class="muted" style="margin-top:10px;">
     📦 总数：<b>{{ total }}</b> ｜ 📄 第 <b>{{ page }}</b> / <b>{{ total_pages }}</b> 页
+  </p>
+
+  <div class="pager">
+    {% if page > 1 %}
+      <a class="btn-link" href="{{ url_for('traffic.index', page=page-1, event_type=event_type) }}">⬅ 上一页</a>
+    {% else %}
+      <span class="btn-link" style="opacity:.55;">⬅ 上一页</span>
+    {% endif %}
+
+    <span class="muted">每页：{{ page_size }} 条</span>
+
+    {% if page < total_pages %}
+      <a class="btn-link" href="{{ url_for('traffic.index', page=page+1, event_type=event_type) }}">下一页 ➡</a>
+    {% else %}
+      <span class="btn-link" style="opacity:.55;">下一页 ➡</span>
+    {% endif %}
   </div>
 
-  <div class="pager" style="justify-content:space-between;">
-    <div>
-      {% if page > 1 %}
-        <a class="btn btn-secondary" href="{{ url_for('traffic.index', page=page-1) }}">⬅ 上一页</a>
-      {% else %}
-        <button class="btn btn-secondary" disabled>⬅ 上一页</button>
-      {% endif %}
-    </div>
-
-    <div class="muted">每页：{{ page_size }} 条</div>
-
-    <div>
-      {% if page < total_pages %}
-        <a class="btn btn-secondary" href="{{ url_for('traffic.index', page=page+1) }}">下一页 ➡</a>
-      {% else %}
-        <button class="btn btn-secondary" disabled>下一页 ➡</button>
-      {% endif %}
-    </div>
-  </div>
-
-  <div class="table-wrap" style="margin-top:12px;">
+  <div class="tf-table-wrap" style="margin-top:12px;">
     <table class="tf-table">
       <thead>
         <tr>
@@ -209,7 +278,7 @@
           <th style="width:90px;">protocol</th>
           <th style="width:170px;">event_type</th>
           <th>description</th>
-          <th style="width:90px;">操作</th>
+          <th style="width:110px;">操作</th>
         </tr>
       </thead>
       <tbody>
@@ -223,9 +292,9 @@
             <td>{{ it.dst_ip }}</td>
             <td>{{ it.protocol }}</td>
             <td>{{ it.event_type }}</td>
-            <td>{{ it.description }}</td>
+            <td><div class="tf-ellipsis" title="{{ it.description }}">{{ it.description }}</div></td>
             <td>
-              <a href="{{ url_for('traffic.detail_page', traffic_id=it.id) }}">详情</a>
+              <a class="btn-link primary" href="{{ url_for('traffic.detail_page', traffic_id=it.id, event_type=event_type) }}">详情</a>
             </td>
           </tr>
           {% endfor %}
@@ -247,9 +316,7 @@
   };
 
   const el = (id)=>document.getElementById(id);
-
-  let pollTimer = null;
-  let busy = false; // 防重复点击
+  let busy = false;
 
   function setStatus(text, level){
     const s = el("tf-status");
@@ -258,7 +325,14 @@
     if(level==="ok") s.classList.add("ok");
     if(level==="error") s.classList.add("error");
   }
-
+  function showImport(text, level){
+    const s = el("tf-import");
+    s.style.display = "";
+    s.textContent = text;
+    s.classList.remove("ok","error");
+    if(level==="ok") s.classList.add("ok");
+    if(level==="error") s.classList.add("error");
+  }
   function setUploadMsg(text, level){
     const s = el("tf-upload-msg");
     s.textContent = text;
@@ -277,19 +351,19 @@
       }
 
       const running = !!data.running;
-      const c = data.counters || {};
-
-      // 注意：busy 时不要让按钮状态被轮询打断（避免用户点了 start 立刻被 status 改回去）
       if(!busy){
         el("tf-start").disabled = running;
         el("tf-stop").disabled = !running;
       }
 
-      setStatus(
-        `状态：${running ? "RUNNING" : "STOPPED"} ｜ inserted=${c.inserted||0} skipped=${c.skipped||0} errors=${c.errors||0} dropped=${c.dropped||0}` +
-        (running ? ` ｜ iface=${data.iface||"-"} ｜ bpf=${data.bpf||"-"}` : ""),
-        running ? "ok" : "info"
-      );
+      const pcap = data.pcap_file || data.last_capture_file || "-";
+      const err = data.last_error ? (" | last_error=" + data.last_error) : "";
+      setStatus(`状态：${running ? "RUNNING" : "STOPPED"} | pcap=${pcap}${err}`, running ? "ok" : "info");
+
+      if(data.last_import){
+        const r = data.last_import;
+        showImport(`最近一次导入：inserted=${r.inserted||0} skipped=${r.skipped||0} errors=${r.errors||0} total_packets=${r.total_packets||0}`, "ok");
+      }
     }catch(e){
       setStatus("状态获取异常：" + e, "error");
     }
@@ -301,32 +375,24 @@
 
     const startBtn = el("tf-start");
     const stopBtn = el("tf-stop");
-
-    // 立即反馈：按钮变暗 + 文案变化
+    const oldText = startBtn.textContent;
     startBtn.disabled = true;
     stopBtn.disabled = true;
-    const oldText = startBtn.textContent;
     startBtn.textContent = "启动中…";
 
     try{
-      const iface = (el("tf-iface").value || "").trim();
-      const bpf = (el("tf-bpf").value || "").trim();
-      const hostName = (el("tf-hostname").value || "").trim();
-      const flush = parseFloat(el("tf-flush").value || "1");
-      const enableAnalysis = el("tf-analysis").value === "1";
+      const iface = (el("tf-iface").value||"").trim();
+      const bpf = (el("tf-bpf").value||"").trim();
+      const hostName = (el("tf-hostname").value||"").trim();
+      const dumpcapPath = (el("tf-dumpcap").value||"").trim();
 
       if(!iface){
-        alert("iface 必填：请粘贴 \\Device\\NPF_{...}");
+        alert("iface 必填：\\Device\\NPF_{...}");
         return;
       }
 
-      const payload = {
-        iface: iface,
-        bpf: bpf || null,
-        host_name: hostName || null,
-        flush_interval_sec: flush,
-        enable_analysis: enableAnalysis
-      };
+      const payload = { iface, bpf: bpf || null, host_name: hostName || null };
+      if(dumpcapPath) payload.dumpcap_path = dumpcapPath;
 
       const resp = await fetch(API.start, {
         method:"POST",
@@ -351,19 +417,30 @@
 
     const startBtn = el("tf-start");
     const stopBtn = el("tf-stop");
-
+    const oldText = stopBtn.textContent;
     stopBtn.disabled = true;
     startBtn.disabled = true;
-    const oldText = stopBtn.textContent;
-    stopBtn.textContent = "停止中…";
+    stopBtn.textContent = "停止并导入中…";
 
     try{
-      const resp = await fetch(API.stop, {method:"POST"});
+      const enableAnalysis = el("tf-analysis").value === "1";
+      const hostName = (el("tf-hostname").value||"").trim();
+
+      const resp = await fetch(API.stop, {
+        method:"POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ enable_analysis: enableAnalysis, host_name: hostName || null })
+      });
       const data = await resp.json();
       if(!data.ok){
-        alert("停止失败：" + (data.error || "unknown"));
+        alert("停止/导入失败：" + (data.error || "unknown"));
         return;
       }
+      if(data.import){
+        const r = data.import;
+        showImport(`导入完成：inserted=${r.inserted||0} skipped=${r.skipped||0} errors=${r.errors||0} total_packets=${r.total_packets||0}`, "ok");
+      }
+      setTimeout(()=>{ window.location.reload(); }, 600);
     }finally{
       stopBtn.textContent = oldText;
       busy = false;
@@ -376,8 +453,8 @@
     busy = true;
 
     const btn = el("tf-upload");
-    btn.disabled = true;
     const oldText = btn.textContent;
+    btn.disabled = true;
     btn.textContent = "上传中…";
 
     try{
@@ -387,7 +464,7 @@
         return;
       }
       const file = fileInput.files[0];
-      const hostName = (el("tf-upload-hostname").value || "").trim();
+      const hostName = (el("tf-upload-hostname").value||"").trim();
       const enableAnalysis = el("tf-upload-analysis").value === "1";
 
       const form = new FormData();
@@ -405,9 +482,7 @@
       }
       const r = data.result || {};
       setUploadMsg(`导入完成：inserted=${r.inserted||0} skipped=${r.skipped||0} errors=${r.errors||0} total_packets=${r.total_packets||0}`, "ok");
-
-      // 导入完成后刷新页面列表（最简单，和 logs 统一风格）
-      setTimeout(()=>{ window.location.href = "{{ url_for('traffic.index') }}"; }, 600);
+      setTimeout(()=>{ window.location.reload(); }, 600);
     }finally{
       btn.textContent = oldText;
       btn.disabled = false;
@@ -420,7 +495,8 @@
   el("tf-upload").addEventListener("click", uploadFile);
 
   refreshStatus();
-  pollTimer = setInterval(refreshStatus, 1000);
+  setInterval(refreshStatus, 1500);
 })();
 </script>
+
 {% endblock %}

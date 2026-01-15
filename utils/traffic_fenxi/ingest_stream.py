@@ -63,14 +63,20 @@ class NetworkTrafficStreamIngestor:
         return {"inserted": self.stats.inserted, "skipped": self.stats.skipped, "errors": self.stats.errors}
 
     def _build_result_dict(self, packet_data: dict[str, Any]) -> dict[str, Any]:
+        anomalies: list[dict[str, Any]] = []
+        covert_result: dict[str, Any] = {}
+
         if self.enable_analysis:
+            # 会话重建（目前用于内部统计/后续扩展，不写入单条事件）
             self.session_rebuilder.add_packet(packet_data)
 
-            anomalies = self.anomaly_detector.analyze_packet(packet_data)
+            # 异常检测
+            anomalies = self.anomaly_detector.analyze_packet(packet_data) or []
             if anomalies:
                 packet_data["anomalies"] = anomalies
 
-            covert_result = self.covert_detector.detect(packet_data)
+            # 隐蔽信道检测
+            covert_result = self.covert_detector.detect(packet_data) or {}
             if covert_result.get("is_covert_channel"):
                 packet_data.setdefault("traffic_features", {})
                 packet_data["traffic_features"]["is_covert_channel"] = True
@@ -85,7 +91,7 @@ class NetworkTrafficStreamIngestor:
                 elif channel_type == "ICMP Tunneling":
                     packet_data["event_type"] = "icmp_tunnel_suspected"
 
-        result_dict = {
+        result_dict: dict[str, Any] = {
             "data_source": "network_traffic",
             "timestamp": packet_data.get("timestamp"),
             "src_ip": packet_data.get("src_ip"),
@@ -99,6 +105,18 @@ class NetworkTrafficStreamIngestor:
             "description": "",
         }
 
+        # === 新增：结构化检测结果写入 result_dict（用于详情页展示证据） ===
+        if self.enable_analysis:
+            detections: dict[str, Any] = {}
+            if anomalies:
+                detections["anomalies"] = anomalies
+            if covert_result:
+                # covert_result 内部已包含 details/indicators 等
+                detections["covert_channel"] = covert_result
+            if detections:
+                result_dict["detections"] = detections
+
+        # description（人类可读摘要）
         parts: list[str] = []
         tf = result_dict["traffic_features"] or {}
         if tf.get("is_covert_channel"):
@@ -110,7 +128,6 @@ class NetworkTrafficStreamIngestor:
             elif ct == "ICMP Tunneling":
                 parts.append("Suspected ICMP tunneling")
 
-        anomalies = packet_data.get("anomalies") or []
         for a in anomalies:
             d = a.get("description")
             if d:
@@ -169,7 +186,6 @@ class NetworkTrafficStreamIngestor:
                     event_hash = generate_event_hash(result_dict)
                     result_json = json.dumps(result_dict, ensure_ascii=False)
                     batch.append((result_json, self.raw_content, event_hash, self.host_name))
-
                 except Exception:
                     self.stats.errors += 1
                     logger.exception("Failed to build packet during flush")

@@ -1,5 +1,9 @@
 """
 离线导入：parsed_packets -> result_dict -> DB（支持去重 event_hash + host_name）
+
+增强：
+- 把 anomalies（结构化）与 covert_result（含 details）写入 result_dict["detections"]
+- 详情页可直接查看检测证据
 """
 from __future__ import annotations
 
@@ -12,7 +16,7 @@ from utils.traffic_fenxi.storage_sqlserver import insert_networktraffic_from_dic
 
 
 def build_result_dict(packet_data: dict[str, Any]) -> dict[str, Any]:
-    return {
+    result_dict: dict[str, Any] = {
         "data_source": "network_traffic",
         "timestamp": packet_data.get("timestamp"),
         "src_ip": packet_data.get("src_ip"),
@@ -25,6 +29,21 @@ def build_result_dict(packet_data: dict[str, Any]) -> dict[str, Any]:
         "traffic_features": packet_data.get("traffic_features", {}) or {},
         "description": packet_data.get("description", "") or "",
     }
+
+    # === 新增：结构化证据写入 result_dict ===
+    detections: dict[str, Any] = {}
+    anomalies = packet_data.get("anomalies")
+    if isinstance(anomalies, list) and anomalies:
+        detections["anomalies"] = anomalies
+
+    covert_result = packet_data.get("covert_result")
+    if isinstance(covert_result, dict) and covert_result:
+        detections["covert_channel"] = covert_result
+
+    if detections:
+        result_dict["detections"] = detections
+
+    return result_dict
 
 
 def ingest_pcap_to_database(
@@ -45,14 +64,21 @@ def ingest_pcap_to_database(
 
     for packet_data in parsed_packets:
         try:
+            anomalies: list[dict[str, Any]] = []
+            covert_result: dict[str, Any] = {}
+
             if enable_analysis:
                 session_rebuilder.add_packet(packet_data)
 
-                anomalies = anomaly_detector.analyze_packet(packet_data)
+                anomalies = anomaly_detector.analyze_packet(packet_data) or []
                 if anomalies:
                     packet_data["anomalies"] = anomalies
 
-                covert_result = covert_detector.detect(packet_data)
+                covert_result = covert_detector.detect(packet_data) or {}
+                if covert_result:
+                    # 保存完整结构化结果（含 details/indicators）
+                    packet_data["covert_result"] = covert_result
+
                 if covert_result.get("is_covert_channel"):
                     packet_data.setdefault("traffic_features", {})
                     packet_data["traffic_features"]["is_covert_channel"] = True
@@ -67,7 +93,7 @@ def ingest_pcap_to_database(
                     elif channel_type == "ICMP Tunneling":
                         packet_data["event_type"] = "icmp_tunnel_suspected"
 
-                # description
+                # description（人类可读摘要）
                 parts: list[str] = []
                 tf = packet_data.get("traffic_features") or {}
                 if tf.get("is_covert_channel"):
@@ -78,10 +104,12 @@ def ingest_pcap_to_database(
                         parts.append("Suspected HTTP covert channel")
                     elif ct == "ICMP Tunneling":
                         parts.append("Suspected ICMP tunneling")
-                for a in packet_data.get("anomalies") or []:
+
+                for a in anomalies:
                     d = a.get("description")
                     if d:
                         parts.append(d)
+
                 if parts:
                     packet_data["description"] = ". ".join(parts)
 
@@ -106,7 +134,9 @@ def ingest_pcap_to_database(
         analysis_results = {
             "sessions": {"total": len(sessions), "statistics": session_rebuilder.get_statistics()},
             "anomalies_detected": sum(1 for p in parsed_packets if "anomalies" in p),
-            "covert_channels_detected": sum(1 for p in parsed_packets if p.get("traffic_features", {}).get("is_covert_channel", False)),
+            "covert_channels_detected": sum(
+                1 for p in parsed_packets if p.get("traffic_features", {}).get("is_covert_channel", False)
+            ),
         }
 
     return {
