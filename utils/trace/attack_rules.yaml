@@ -12,8 +12,7 @@
     technique_name: "Brute Force"
   trigger:
     event_type: "user_logon_failed"
-    threshold: 1     #5
-  # 简单阈值逻辑通常在流计算引擎处理，此处假设单条高频失败日志或聚合结果
+    threshold: 5
   description: "Detects multiple failed login attempts indicative of brute force."
 
 - rule_id: "HL_002_AccountManipulation"
@@ -25,8 +24,9 @@
     technique_name: "Account Manipulation"
   trigger:
     event_type: "group_membership_add"
+    # [Fix] 接口文档未明确 target_group，但标准日志解析会包含。假设代码会解析 entities
     entities:
-      target_group: ["Administrators", "root", "wheel"] # 伪代码逻辑，需匹配实体字段
+      target_group: "Administrators"
   description: "Detects user addition to privileged groups."
 
 - rule_id: "HL_003_LogClearing"
@@ -55,8 +55,8 @@
   trigger:
     event_type: "process_create"
     behavior_features:
-      is_abnormal_parent: true # 直接利用接口中的特征字段
-  description: "Detects shell execution from abnormal parent processes (e.g., Word spawning CMD)."
+      is_abnormal_parent: true
+  description: "Detects shell execution from abnormal parent processes."
 
 - rule_id: "HB_002_ProcessInjection"
   data_source: "host_behavior"
@@ -66,11 +66,10 @@
     technique_id: "T1055"
     technique_name: "Process Injection"
   trigger:
-    event_type: "process_injection" 
-    # 或者
+    event_type: "process_injection"
     behavior_features:
       has_memory_injection: true
-  description: "Detects code injection into other processes (e.g., CreateRemoteThread)."
+  description: "Detects code injection into other processes."
 
 - rule_id: "HB_003_Persistence_Registry"
   data_source: "host_behavior"
@@ -81,7 +80,9 @@
     technique_name: "Registry Run Keys / Startup Folder"
   trigger:
     event_type: "registry_set_value"
-    # 后续代码需检查路径是否包含 Run/RunOnce
+    # [Fix] 这里的匹配逻辑需要在 Attck_Map.py 中支持 entities 的正则/包含匹配
+    entities:
+      registry_key: "CurrentVersion\\Run"
   description: "Detects modification of registry run keys for persistence."
 
 - rule_id: "HB_004_Webshell_Creation"
@@ -93,9 +94,12 @@
     technique_name: "Server Software Component: Web Shell"
   trigger:
     event_type: "file_create"
-    # 此处假设 entities.file_extension 在预处理中被提取，或需在代码正则匹配
-    condition_extra: "file_extension in ['jsp', 'php', 'asp', 'aspx']" 
-  description: "Detects creation of web shell scripts."
+    # [Fix] 移除了 condition_extra，建议在 Agent 端做后缀判断并打上 features 标签
+    # 或者你需要升级 Attck_Map.py 来支持 file_extension 的提取判断
+    behavior_features:
+      is_suspicious_extension: true
+    threshold: 5
+  description: "Detects creation of web shell scripts (php/jsp/asp)."
 
 - rule_id: "HB_005_SensitiveFileAccess"
   data_source: "host_behavior"
@@ -103,11 +107,12 @@
     tactic_id: "TA0006"
     tactic_name: "Credential Access"
     technique_id: "T1003.008"
-    technique_name: "OS Credential Dumping: /etc/passwd and /etc/shadow"
+    technique_name: "OS Credential Dumping"
   trigger:
     event_type: "file_read"
+    # [Fix] 接口文档 behavior_features 需扩充此字段，或 Agent 需支持
     behavior_features:
-      is_sensitive_path: true  # 需在预处理提取: /etc/shadow, /etc/passwd, /etc/master.passwd
+      is_sensitive_path: true
   description: "Detects reading of sensitive system credential files."
 
 - rule_id: "HB_006_SuspiciousFileExec"
@@ -116,11 +121,16 @@
     tactic_id: "TA0002"
     tactic_name: "Execution"
     technique_id: "T1059.004"
-    technique_name: "Command and Scripting Interpreter: Unix Shell"
+    technique_name: "Unix Shell"
   trigger:
-    event_type: "file_change_permission"  # 或 process_create
-    condition_extra: "file_path startswith '/tmp/' AND ('chmod' in command_line OR '+x' in command_line)"
-  description: "Detects executable permission setting in temporary directories."
+    # [Fix] 原 file_change_permission 不存在，改为 process_create 监控 chmod 命令
+    event_type: "process_create"
+    entities:
+      process_name: "chmod"
+    # 需代码支持 cmdline 关键字匹配
+    behavior_features:
+      is_suspicious_cmd: true
+  description: "Detects executable permission setting via chmod +x."
 
 - rule_id: "HB_007_DiscoveryCommands"
   data_source: "host_behavior"
@@ -131,8 +141,11 @@
     technique_name: "System Information Discovery"
   trigger:
     event_type: "process_create"
-    condition_extra: "process_name in ['whoami', 'id', 'ifconfig', 'ip', 'netstat', 'uname']"
-    threshold: 3  # 短时间内执行3次以上
+    # [Fix] 移除 condition_extra，改为明确的 entities 列表匹配
+    # 注意：Attck_Map.py 需要添加逻辑支持 value 为列表时的 "IN" 判断
+    entities:
+      process_name: ["whoami", "id", "ifconfig", "ip", "netstat", "uname"]
+    threshold: 3
   description: "Detects rapid execution of system discovery commands."
 
 - rule_id: "HB_008_CronPersistence"
@@ -144,8 +157,11 @@
     technique_name: "Scheduled Task/Job: Cron"
   trigger:
     event_type: "file_modify"
-    condition_extra: "file_path contains '/var/spool/cron/' OR file_path contains '/etc/cron.d/'"
+    # [Fix] 移除 condition_extra，改为 features (推荐) 或 entities 包含匹配
+    behavior_features:
+      is_cron_job_path: true
   description: "Detects modification of cron jobs for persistence."
+
 # -----------------------------------------------------------------------------
 # 3. 网络流量规则 (Network Traffic Rules)
 # 对应题目功能：隐蔽信道检测、数据外传检测、C2基础设施关联
@@ -157,7 +173,7 @@
     tactic_id: "TA0011"
     tactic_name: "Command and Control"
     technique_id: "T1071.004"
-    technique_name: "Application Layer Protocol: DNS"
+    technique_name: "DNS Tunneling"
   trigger:
     event_type: "dns_tunnel_suspected"
     traffic_features:
