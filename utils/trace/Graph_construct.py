@@ -379,7 +379,7 @@ class GraphIngestionEngine:
         MERGE (a1)-[r:NEXT_STAGE]->(a2)
         SET r.type = 'temporal', r.confidence = 'Low'
         """
-        self._run_massive_update(chain_query, window=600)
+        self._run_massive_update(chain_query, window=1800)
         logging.info(f"已分批处理 {len(attack_data_list)} 条 ATT&CK 事件并更新时序链")
 
     # 4.3 因果链 (Causal Chain)
@@ -387,35 +387,42 @@ class GraphIngestionEngine:
         logging.info("开始执行因果关联分析...")
 
         causal_query = """
-        MATCH (a1:AttackEvent)
-        MATCH (a2:AttackEvent)
-        WHERE a1.victim_ip = a2.victim_ip
-          AND a1.attack_id <> a2.attack_id
-          AND datetime(a1.timestamp_start) > datetime() - duration('P1D')
-          AND datetime(a2.timestamp_start) > datetime() - duration('P1D')
+                MATCH (a1:AttackEvent)
+                MATCH (a2:AttackEvent)
+                // 1. 去掉 a1.victim_ip = a2.victim_ip 的限制
+                WHERE a1.attack_id <> a2.attack_id
+                  AND datetime(a1.timestamp_start) > datetime() - duration('P1D')
+                  AND datetime(a2.timestamp_start) > datetime() - duration('P1D')
 
-          AND (
-              datetime(a1.timestamp_end) < datetime(a2.timestamp_start)
-              OR 
-              (datetime(a1.timestamp_end) = datetime(a2.timestamp_start) AND a1.id < a2.id)
-          )
+                  // 2. 依然保持时间先后顺序 (横向移动通常有先后)
+                  AND (
+                      datetime(a1.timestamp_end) < datetime(a2.timestamp_start)
+                      OR 
+                      (datetime(a1.timestamp_end) = datetime(a2.timestamp_start) AND a1.id < a2.id)
+                  )
+                  // 3. 适当放宽时间窗口 (横向移动可能需要更多时间探测)
+                  AND duration.inSeconds(datetime(a1.timestamp_end), datetime(a2.timestamp_start)).seconds < $window
 
-          AND duration.inSeconds(datetime(a1.timestamp_end), datetime(a2.timestamp_start)).seconds < $window
+                MATCH (e1)-[:TRIGGERED]->(a1)
+                MATCH (e2)-[:TRIGGERED]->(a2)
 
-        MATCH (e1)-[:TRIGGERED]->(a1)
-        MATCH (e2)-[:TRIGGERED]->(a2)
-        WITH a1, a2, e1, e2
+                // 4. 优化路径查询：显式寻找包含跨主机连接的路径
+                // 注意：这可能会增加查询负载，建议限制 max_hops
+                MATCH path = shortestPath((e1)-[:Spawn|Write|Read|Inject|Connect|Resolve|Load|Traffic_Flow*1..8]-(e2))
 
-        MATCH path = shortestPath((e1)-[:Spawn|Write|Read|Inject|Connect|Resolve|Load*1..6]-(e2))
+                // 5. 确保路径是有效的（可选：如果是跨IP，必须包含 Connect 或 Traffic_Flow）
+                WITH a1, a2, path
+                WHERE a1.victim_ip = a2.victim_ip OR any(r IN relationships(path) WHERE type(r) IN ['Connect', 'Traffic_Flow'])
 
-        CALL (a1, a2, path) {
-            MERGE (a1)-[r:NEXT_STAGE]->(a2)
-            SET r.type = 'causal',
-                r.confidence = 'High',
-                r.path_length = length(path),
-                r.time_gap = duration.inSeconds(datetime(a1.timestamp_end), datetime(a2.timestamp_start)).seconds
-        } IN TRANSACTIONS OF 100 ROWS
-        """
+                CALL (a1, a2, path) {
+                    MERGE (a1)-[r:NEXT_STAGE]->(a2)
+                    SET r.type = 'causal',
+                        r.confidence = 'High',
+                        r.description = 'Lateral Movement detected',  // 标记为横向移动
+                        r.path_length = length(path),
+                        r.time_gap = duration.inSeconds(datetime(a1.timestamp_end), datetime(a2.timestamp_start)).seconds
+                } IN TRANSACTIONS OF 100 ROWS
+                """
 
         self._run_massive_update(causal_query, window=time_window_seconds)
         logging.info("因果推断分析更新完成")

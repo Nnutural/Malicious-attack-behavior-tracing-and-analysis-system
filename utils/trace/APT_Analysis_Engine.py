@@ -227,27 +227,28 @@ class APTAnalysisEngine:
         // 逻辑：外部IP -> 流量(端口匹配) -> Web进程 -> 衍生恶意进程
         // =========================================================
         MATCH (root:Process {host: $ip, pid: $pid})
-        // 确保 root 进程在攻击开始前或同时存在
         WHERE datetime(root.timestamp) <= datetime($ts)
 
-        // 查找在该进程启动前，外部IP对该主机的入站流量
         MATCH (attacker:IP)-[flow:Traffic_Flow]->(victim:IP {id: $ip})
-        WHERE attacker.type = 'External'  
+        // [修改核心] 去掉 attacker.type = 'External' 的限制，改为排除自身
+        WHERE attacker.ip <> $ip
           AND datetime(flow.timestamp) >= datetime(root.timestamp) - duration('PT10M') 
           AND datetime(flow.timestamp) <= datetime(root.timestamp)
 
-        // 强关联：进程名暗示了它是一个网络服务
         AND (
-            root.name =~ '(?i).*(java|w3wp|tomcat|nginx|httpd|php|node).*'
+            root.name =~ '(?i).*(java|w3wp|tomcat|nginx|httpd|php|node|ssh|sshd).*' // 增加 sshd
             OR
             exists((root)-[:LISTEN]->()) 
         )
 
         RETURN 
-            'Exploit Public-Facing Application' AS type,
+            CASE 
+                WHEN attacker.type = 'External' THEN 'Exploit Public-Facing Application'
+                ELSE 'Lateral Movement / Internal Compromise' 
+            END AS type,
             attacker.ip AS intruder_ip,
             'High' AS confidence,
-            'Attacker accessed port ' + toString(flow.dst_port) + ' of service ' + root.name AS evidence,
+            'Traffic from ' + attacker.ip + ' preceded process ' + root.name AS evidence,
             flow.timestamp AS entry_time
 
         UNION ALL
