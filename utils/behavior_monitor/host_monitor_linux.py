@@ -45,14 +45,34 @@ class ActionType:
 class ForensicsUtils:
     @staticmethod
     def get_host_ip() -> str:
+        # 1. 优先尝试：UDP 探测 (保留原有逻辑，万一后续切换了网络模式也能用)
         try:
+            # 如果你知道宿主机在 Host-Only 网络的 IP（例如 192.168.56.1），
+            # 也可以把这里的 "8.8.8.8" 改成宿主机 IP，那样即使断网也能成功。
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
             ip = s.getsockname()[0]
             s.close()
             return ip
         except Exception:
-            return "127.0.0.1"
+            pass
+
+        # 2. 兜底方案：使用 Shell 命令 hostname -I (适用于 Host-Only/断网环境)
+        try:
+            import subprocess
+            # hostname -I 返回类似 "192.168.56.101 172.17.0.1 \n"
+            cmd = ["hostname", "-I"]
+            output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
+            # 分割并取第一个非 127 开头的 IP
+            ips = output.split()
+            for ip in ips:
+                if ip and not ip.startswith("127."):
+                    return ip
+        except Exception:
+            pass
+
+        # 3. 实在获取不到，返回本地回环
+        return "127.0.0.1"
 
     @staticmethod
     def get_timestamp() -> str:
@@ -160,6 +180,30 @@ class HostBehaviorEngine:
                 "protocol": proto,
             }
 
+            behavior_features = {
+                "is_abnormal_parent": False,
+                "has_memory_injection": False,
+                "is_sensitive_path": False,  # 新增
+                "is_suspicious_cmd": False,  # 新增
+                "is_suspicious_extension": False  # 新增
+            }
+
+            # 1. 检测敏感路径 (对应 HB_005)
+            if entities["file_path"] and (
+                    "/etc/shadow" in entities["file_path"] or "/etc/passwd" in entities["file_path"]):
+                behavior_features["is_sensitive_path"] = True
+
+            # 2. 检测可疑命令 (对应 HB_006)
+            if "chmod" in proc or "chmod" in cmd:
+                # 简单判断：赋予执行权限
+                if "+x" in cmd or "777" in cmd:
+                    behavior_features["is_suspicious_cmd"] = True
+
+            # 3. 检测可疑后缀 (对应 HB_004, 虽然攻击脚本暂未用到 Webshell，但建议加上)
+            if entities["file_path"] and (
+                    entities["file_path"].endswith(".php") or entities["file_path"].endswith(".jsp")):
+                behavior_features["is_suspicious_extension"] = True
+
             alert = {
                 "data_source": "host_behavior",
                 "timestamp": ForensicsUtils.get_timestamp(),
@@ -167,12 +211,14 @@ class HostBehaviorEngine:
                 "event_type": "unknown",
                 "action": ActionType.UNKNOWN,
                 "entities": entities,
-                "behavior_features": {"is_abnormal_parent": False, "has_memory_injection": False},
+                "behavior_features": behavior_features,
                 "description": output,
             }
 
             lower_rule = rule.lower()
             lower_out = output.lower()
+
+
 
             # 1) 注入
             if "process_injection" in lower_rule or "ptrace" in lower_out:

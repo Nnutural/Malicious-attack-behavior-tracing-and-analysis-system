@@ -110,6 +110,20 @@ class ATTACKMapper:
         """
         核心函数：接收单条归一化后的数据，返回ATT&CK映射结果
         """
+        # --- [新增] 白名单过滤逻辑 ---
+        entities = event_data.get('entities', {})
+        cmdline = entities.get('command_line') or entities.get('cmdline') or ""
+
+        # 1. 忽略探针自身的进程 (防止递归检测)
+        if "client_agent.py" in cmdline or "behavior_monitor" in cmdline:
+            return []
+
+        # 2. 忽略分析引擎自身的流量 (连接 Neo4j 或 SQL Server 的流量)
+        dst_port = event_data.get('dst_port')
+        if dst_port in [7687, 1433, 5000]:  # Neo4j, SQL, Flask
+            return []
+        # ---------------------------
+
         if not self.rules:
             logging.warning("规则库为空，无法执行分析")
             return []

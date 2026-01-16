@@ -1,4 +1,60 @@
 # -----------------------------------------------------------------------------
+# 4. 缺失的关键规则补充 (Lazarus 特征)
+# -----------------------------------------------------------------------------
+
+# 对应攻击.md P2: 初始入侵 (wget 下载)
+- rule_id: "HB_100_IngressTool_Wget"
+  data_source: "host_behavior"
+  attack_mapping:
+    tactic_id: "TA0011"
+    technique_id: "T1105"
+    technique_name: "Ingress Tool Transfer"
+  trigger:
+    event_type: "process_create"
+    entities:
+      process_name: ["wget", "curl"]
+
+# 对应攻击.md P4: 横向移动 (sshpass)
+- rule_id: "HB_009_LateralTool_SSH"
+  data_source: "host_behavior"
+  attack_mapping:
+    tactic_id: "TA0008"
+    technique_id: "T1021.004"
+    technique_name: "SSH"
+  trigger:
+    event_type: "process_create"
+    entities:
+      process_name: "sshpass"
+
+- rule_id: "HB_101_WMI_Execution"
+  data_source: "host_behavior"
+  attack_mapping:
+    tactic_id: "TA0002"
+    tactic_name: "Execution"
+    technique_id: "T1047"
+    technique_name: "Windows Management Instrumentation"
+  trigger:
+    event_type: "process_create"
+    entities:
+      process_name: "WmiPrvSE.exe"
+      parent_process: "svchost.exe" # WMI 通常由 svchost 启动
+  description: "Detects WMI provider host execution often used for lateral movement."
+
+- rule_id: "HB_102_Shadow_Copy"
+  data_source: "host_behavior"
+  attack_mapping:
+    tactic_id: "TA0006"
+    tactic_name: "Credential Access"
+    technique_id: "T1003.008"
+    technique_name: "OS Credential Dumping"
+  trigger:
+    event_type: "file_read"
+    entities:
+      file_path: "/etc/shadow" # 对应攻击.md 中的敏感文件窃取
+  description: "Detects reading of critical shadow file."
+
+
+# -----------------------------------------------------------------------------
 # 1. 主机日志规则 (Host Log Rules)
 # 对应题目功能：身份溯源、登录会话重建、暴力破解检测、权限提升检测
 # -----------------------------------------------------------------------------
@@ -12,7 +68,7 @@
     technique_name: "Brute Force"
   trigger:
     event_type: "user_logon_failed"
-    threshold: 5
+    threshold: 10
   description: "Detects multiple failed login attempts indicative of brute force."
 
 - rule_id: "HL_002_AccountManipulation"
@@ -56,6 +112,7 @@
     event_type: "process_create"
     behavior_features:
       is_abnormal_parent: true
+    threshold: 1
   description: "Detects shell execution from abnormal parent processes."
 
 - rule_id: "HB_002_ProcessInjection"
@@ -98,7 +155,7 @@
     # 或者你需要升级 Attck_Map.py 来支持 file_extension 的提取判断
     behavior_features:
       is_suspicious_extension: true
-    threshold: 5
+    threshold: 10
   description: "Detects creation of web shell scripts (php/jsp/asp)."
 
 - rule_id: "HB_005_SensitiveFileAccess"
@@ -145,7 +202,7 @@
     # 注意：Attck_Map.py 需要添加逻辑支持 value 为列表时的 "IN" 判断
     entities:
       process_name: ["whoami", "id", "ifconfig", "ip", "netstat", "uname"]
-    threshold: 3
+    threshold: 2
   description: "Detects rapid execution of system discovery commands."
 
 - rule_id: "HB_008_CronPersistence"
@@ -213,3 +270,4 @@
   trigger:
     event_type: "port_scan"
   description: "Detects internal reconnaissance via port scanning."
+

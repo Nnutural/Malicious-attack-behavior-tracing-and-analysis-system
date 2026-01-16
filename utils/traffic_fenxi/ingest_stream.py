@@ -74,6 +74,11 @@ class NetworkTrafficStreamIngestor:
             anomalies = self.anomaly_detector.analyze_packet(packet_data) or []
             if anomalies:
                 packet_data["anomalies"] = anomalies
+                # [新增修复]：如果检测到端口扫描异常，强制修改 event_type 以匹配 YAML 规则
+                for anomaly in anomalies:
+                    if anomaly.get("rule_id") == "ANOMALY_001":  # 对应 Port Scan
+                        packet_data["event_type"] = "port_scan"
+                        break
 
             # 隐蔽信道检测
             covert_result = self.covert_detector.detect(packet_data) or {}
