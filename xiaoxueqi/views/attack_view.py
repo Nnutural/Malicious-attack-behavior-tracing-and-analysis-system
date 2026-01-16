@@ -11,7 +11,7 @@ from utils.db.db import fetch_all, fetch_one
 
 bp = Blueprint("attack", __name__)
 
-NEO4J_URI = "bolt://localhost:7687"
+NEO4J_URI = "bolt://10.21.211.11:7687"
 NEO4J_USER = "neo4j"
 NEO4J_PASS = "00000000"
 

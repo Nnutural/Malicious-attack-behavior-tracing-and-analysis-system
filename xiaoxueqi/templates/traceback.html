@@ -22,11 +22,6 @@
       <button class="btn btn-primary" id="btnAnalyze">运行分析</button>
 
       <label class="switch">
-        <input type="checkbox" id="chkMock" checked>
-        <span>Mock 模式</span>
-      </label>
-
-      <label class="switch">
         <input type="checkbox" id="chkCache" checked>
         <span>使用缓存</span>
       </label>
@@ -85,6 +80,7 @@
           <button class="tab" data-tab="timeline">时间线</button>
           <button class="tab" data-tab="ioc">IOC / 情报 / 归因</button>
           <button class="tab" data-tab="raw">原始 JSON</button>
+          <button class="tab" data-tab="ai-report">AI 研判报告 ✨</button>
         </div>
 
         <!-- 图谱 TAB：图例横排放图上方；详情放图下方 -->
@@ -120,6 +116,16 @@
         <section class="tab-content" id="tab-raw">
           <pre id="rawJson">{}</pre>
         </section>
+
+        <section class="tab-content" id="tab-ai-report">
+          <div style="margin-bottom: 12px;">
+            <button class="btn btn-primary" id="btnGenAI">🤖 生成/刷新 AI 报告</button>
+            <span id="aiStatus" class="muted" style="margin-left:10px;"></span>
+          </div>
+          <div id="aiReportBox" class="markdown-body pre-dark" style="background:#fff; color:#111; border:1px solid #eee; padding:20px;">
+            <div class="muted">请点击上方按钮生成报告。</div>
+          </div>
+      </section>
       </div>
     </main>
   </div>
@@ -137,4 +143,5 @@
 {% block extra_js %}
 <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 <script src="{{ url_for('static', filename='traceback/traceback.js') }}"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 {% endblock %}

@@ -15,9 +15,13 @@ class CTILoader:
     def close(self):
         self.driver.close()
 
-    def fetch_and_load(self):
+    def fetch_and_load(self, limit_groups=20):
+        """
+        :param limit_groups: 限制导入的 APT 组织数量，默认为 20 个，防止内存/数据库压力过大
+        """
         logging.info("正在从 MITRE GitHub 下载 ATT&CK 数据...")
         try:
+            # MITRE 的文件大约 10MB+，Python 内存完全没问题
             response = requests.get(self.mitre_url)
             if response.status_code != 200:
                 logging.error("下载失败")
@@ -39,6 +43,7 @@ class CTILoader:
             obj_type = obj.get("type")
 
             if obj_type == "intrusion-set":
+                # 提取 APT 组织
                 groups[obj.get("id")] = {
                     "name": obj.get("name"),
                     "aliases": obj.get("aliases", []),
@@ -46,7 +51,7 @@ class CTILoader:
                 }
 
             elif obj_type == "attack-pattern":
-                # 提取 external_id (e.g., T1059)
+                # 提取技术 (T1059 等)
                 ext_refs = obj.get("external_references", [])
                 t_id = next((ref["external_id"] for ref in ext_refs if ref["source_name"] == "mitre-attack"), None)
                 if t_id:
@@ -61,8 +66,28 @@ class CTILoader:
                     "target": obj.get("target_ref")
                 })
 
-        # 2. 写入 Neo4j
-        self._ingest_to_neo4j(groups, techniques, relationships)
+        # ================= [新增：数据量裁剪逻辑] =================
+        logging.info(f"原始数据包含 {len(groups)} 个组织，{len(techniques)} 项技术。正在进行裁剪...")
+
+        # 1. 裁剪组织：只保留前 limit_groups 个（或者你可以指定保留特定名字的组织）
+        # 提示：为了演示效果，你可以手动把 "Lazarus Group" 或 "APT29" 这种著名的加进去
+        target_group_ids = list(groups.keys())[:limit_groups]
+
+        # 裁剪后的 groups 字典
+        limited_groups = {k: groups[k] for k in target_group_ids}
+
+        # 2. 裁剪关系：只保留 源头是这些组织的 关系
+        # 我们不裁剪 Technique，因为技术是“字典”，量不大且通用，保留全量有助于匹配
+        limited_relationships = [
+            r for r in relationships
+            if r["source"] in limited_groups
+        ]
+
+        logging.info(f"裁剪完成：将导入 {len(limited_groups)} 个组织和 {len(limited_relationships)} 条关联关系。")
+        # ========================================================
+
+        # 2. 写入 Neo4j (传入裁剪后的数据)
+        self._ingest_to_neo4j(limited_groups, techniques, limited_relationships)
 
     def _ingest_to_neo4j(self, groups, techniques, relationships):
         logging.info("开始写入 Neo4j 知识库...")

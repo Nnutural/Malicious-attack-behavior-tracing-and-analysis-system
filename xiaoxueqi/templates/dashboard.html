@@ -2,61 +2,317 @@
 
 {% block title %}仪表盘 - 攻击溯源分析系统{% endblock %}
 
+{% block extra_css %}
+<style>
+  /* =========================================================
+     Dashboard (no engine control)
+     风格目标：干净、统一、信息密度适中
+     ========================================================= */
+  :root{
+    --bg: #f6f7fb;
+    --card: #ffffff;
+    --text: #111827;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --shadow: 0 10px 26px rgba(17,24,39,.06);
+
+    --primary: #111;        /* 与 traceback.css 的按钮一致 */
+    --accent: #2563eb;      /* 点缀色 */
+    --accent-weak: rgba(37,99,235,.10);
+  }
+
+  .dash-wrap{
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 14px 16px 28px;
+  }
+
+  .dash-bg{
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 14px;
+  }
+
+  .dash-top{
+    display:flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items:flex-start;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+
+  .dash-title h2{
+    margin: 0 0 6px 0;
+    font-size: 20px;
+    letter-spacing: .2px;
+    color: var(--text);
+  }
+  .dash-title p{
+    margin: 0;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.7;
+  }
+
+  .dash-actions{
+    display:flex;
+    gap: 10px;
+    align-items:center;
+    flex-wrap: wrap;
+    justify-content:flex-end;
+  }
+
+  .btn{
+    border: 1px solid var(--border);
+    background: #fff;
+    color: var(--text);
+    padding: 9px 12px;
+    border-radius: 12px;
+    font-size: 13px;
+    cursor:pointer;
+    text-decoration:none;
+    user-select:none;
+  }
+  .btn:hover{ background:#f9fafb; }
+  .btn-primary{
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+    font-weight: 700;
+  }
+  .btn-primary:hover{ background:#222; border-color:#222; }
+
+  .grid{
+    display:grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .card{
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 12px;
+    box-shadow: var(--shadow);
+  }
+
+  .card-title{
+    display:flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+  }
+  .card-title h3{
+    margin: 0;
+    font-size: 15px;
+    color: var(--text);
+  }
+  .muted{ color: var(--muted); font-size: 12px; }
+
+  /* KPI */
+  .kpi-grid{
+    display:grid;
+    grid-template-columns: repeat(4, minmax(180px, 1fr));
+    gap: 10px;
+  }
+  .kpi{
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 12px;
+    background: #fff;
+    position: relative;
+    overflow: hidden;
+  }
+  .kpi::before{
+    content:"";
+    position:absolute;
+    inset:0;
+    background: radial-gradient(520px 180px at 18% 0%, var(--accent-weak), rgba(37,99,235,0));
+    pointer-events:none;
+  }
+  .kpi > *{ position: relative; }
+  .kpi .t{
+    font-weight: 900;
+    font-size: 13px;
+    color: var(--text);
+    display:flex;
+    align-items:center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .kpi .tag{
+    font-size: 12px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background:#fff;
+    color:#111;
+    white-space: nowrap;
+  }
+  .kpi .n{
+    font-size: 28px;
+    font-weight: 950;
+    margin-top: 8px;
+    letter-spacing: .2px;
+    color: var(--text);
+  }
+  .kpi .s{
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  /* Table */
+  table{
+    width:100%;
+    border-collapse: collapse;
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  th, td{
+    padding: 10px 10px;
+    border-bottom: 1px solid var(--border);
+    text-align:left;
+    font-size: 13px;
+    vertical-align: top;
+    color: var(--text);
+  }
+  th{
+    background: #f9fafb;
+    font-weight: 900;
+  }
+  tr:hover td{ background:#fafafa; }
+
+  code{
+    background:#f3f4f6;
+    padding: 2px 6px;
+    border-radius: 10px;
+  }
+
+  .a{
+    color: var(--accent);
+    text-decoration: none;
+    font-weight: 800;
+  }
+  .a:hover{ text-decoration: underline; }
+
+  @media (max-width: 1100px){
+    .kpi-grid{ grid-template-columns: repeat(2, minmax(180px, 1fr)); }
+  }
+  @media (max-width: 520px){
+    .dash-wrap{ padding: 12px; }
+    .dash-bg{ padding: 12px; }
+    .kpi-grid{ grid-template-columns: 1fr; }
+  }
+</style>
+{% endblock %}
+
 {% block content %}
-<section class="page-head">
-  <h2>系统仪表盘</h2>
-  <p class="muted">展示全局统计信息与最新告警（当前为示例数据）。</p>
-</section>
+<div class="dash-wrap">
+  <div class="dash-bg">
 
-<section class="grid">
-  <div class="card stat">
-    <div class="stat-label">主机日志总数</div>
-    <div class="stat-value">{{ stats.log_count }}</div>
-  </div>
-  <div class="card stat">
-    <div class="stat-label">进程行为记录</div>
-    <div class="stat-value">{{ stats.process_count }}</div>
-  </div>
-  <div class="card stat">
-    <div class="stat-label">网络流量条数</div>
-    <div class="stat-value">{{ stats.flow_count }}</div>
-  </div>
-  <div class="card stat">
-    <div class="stat-label">攻击事件数</div>
-    <div class="stat-value">{{ stats.attack_count }}</div>
-  </div>
-</section>
+    <div class="dash-top">
+      <div class="dash-title">
+        <h2>系统仪表盘</h2>
+        <p>
+          展示 SQL Server 入库情况与最近溯源报告（AttackReports）。<br>
+          快速入口：建议演示顺序 <b>仪表盘 → 攻击链 → 溯源分析</b>
+        </p>
+      </div>
 
-<section class="card">
-  <h3>最近攻击事件（示例）</h3>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>时间</th>
-          <th>主机</th>
-          <th>攻击技术</th>
-          <th>严重程度</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>2026-01-12 10:30:15</td>
-          <td>Server-01</td>
-          <td>T1078 - Valid Accounts</td>
-          <td><span class="badge danger">高</span></td>
-          <td><a class="link" href="{{ url_for('traceback.index') }}">详情</a></td>
-        </tr>
-        <tr>
-          <td>2026-01-12 10:25:42</td>
-          <td>Server-02</td>
-          <td>T1059 - Command Execution</td>
-          <td><span class="badge warn">中</span></td>
-          <td><a class="link" href="{{ url_for('traceback.index') }}">详情</a></td>
-        </tr>
-      </tbody>
-    </table>
+      <div class="dash-actions">
+        <a class="btn btn-primary" href="{{ url_for('traceback.index') }}">进入溯源分析</a>
+        <a class="btn" href="{{ url_for('attack.index') }}">攻击链</a>
+        <a class="btn" href="{{ url_for('logs.list_logs') }}">日志分析</a>
+      </div>
+    </div>
+
+    <div class="grid">
+
+      <div class="card">
+        <div class="card-title">
+          <h3>全局统计</h3>
+          <div class="muted">SecurityTraceDB（SQL Server）</div>
+        </div>
+
+        <div class="kpi-grid">
+          <div class="kpi">
+            <div class="t">HostLogs <span class="tag">主机日志</span></div>
+            <div class="n">{{ stats.log_count }}</div>
+            <div class="s">最新入库：{{ freshness.HostLogs or "-" }}</div>
+          </div>
+
+          <div class="kpi">
+            <div class="t">HostBehaviors <span class="tag">主机行为</span></div>
+            <div class="n">{{ stats.process_count }}</div>
+            <div class="s">最新入库：{{ freshness.HostBehaviors or "-" }}</div>
+          </div>
+
+          <div class="kpi">
+            <div class="t">NetworkTraffic <span class="tag">网络流量</span></div>
+            <div class="n">{{ stats.flow_count }}</div>
+            <div class="s">最新入库：{{ freshness.NetworkTraffic or "-" }}</div>
+          </div>
+
+          <div class="kpi">
+            <div class="t">AttackReports <span class="tag">溯源报告</span></div>
+            <div class="n">{{ stats.attack_count }}</div>
+            <div class="s">最新生成：{{ freshness.AttackReports or "-" }}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          <h3>最近溯源报告（AttackReports）</h3>
+          <div class="muted">来源：dbo.AttackReports.report_json（摘要从 attack_chain 推断）</div>
+        </div>
+
+        {% if recent_reports and recent_reports|length > 0 %}
+          <table>
+            <thead>
+              <tr>
+                <th style="width:160px;">created_at</th>
+                <th>scenario_id</th>
+                <th style="width:140px;">victim_ip</th>
+                <th style="width:140px;">attacker_ip</th>
+                <th style="width:92px;">confidence</th>
+                <th>摘要</th>
+                <th style="width:90px;">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in recent_reports %}
+              <tr>
+                <td>{{ r.created_at }}</td>
+                <td><code>{{ r.scenario_id }}</code></td>
+                <td>{{ r.victim_ip }}</td>
+                <td>{{ r.attacker_ip }}</td>
+                <td>{{ r.confidence }}</td>
+                <td style="max-width: 520px;">
+                  <b>{{ r.attribution_name }}</b>
+                  <div class="muted">
+                    {{ r.trigger_technique }}
+                    {% if r.time_window %}<br>window: {{ r.time_window }}{% endif %}
+                  </div>
+                </td>
+                <td><a class="a" href="{{ url_for('traceback.index') }}">查看</a></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <div class="muted">
+            暂无 AttackReports 数据。请先运行 pipeline 生成报告（本页面已移除“分析引擎控制”逻辑）。
+          </div>
+        {% endif %}
+      </div>
+
+    </div>
   </div>
-</section>
+</div>
 {% endblock %}

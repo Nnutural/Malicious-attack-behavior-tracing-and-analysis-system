@@ -205,14 +205,13 @@ function pickReportIndex(i) {
 }
 
 async function analyze() {
-  const mockMode = $("chkMock").checked;
   const useCache = $("chkCache").checked;
 
   setStatus("分析中...");
   const resp = await fetch(window.__TRACEBACK_API__.analyze, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mock_mode: mockMode, use_cache: useCache })
+    body: JSON.stringify({ use_cache: useCache })
   });
   const data = await resp.json();
 
@@ -241,10 +240,9 @@ async function analyze() {
 }
 
 async function refreshHighAlerts() {
-  const mockMode = $("chkMock").checked;
   setStatus("加载列表中...");
 
-  const url = window.__TRACEBACK_API__.high_alerts + (mockMode ? "?mock_mode=1" : "?mock_mode=0");
+  const url = window.__TRACEBACK_API__.high_alerts;
   const resp = await fetch(url);
   const data = await resp.json();
 
@@ -263,3 +261,60 @@ $("btnRefresh").addEventListener("click", refreshHighAlerts);
 
 // 默认自动跑一次（你演示更方便）
 analyze();
+
+// 全局变量存储当前选中的报告数据
+let currentReportData = null;
+
+// 修改 pickReportIndex 函数，记录当前数据
+const originalPickReportIndex = pickReportIndex;
+pickReportIndex = function(i) {
+    originalPickReportIndex(i); // 调用原函数
+    currentReportData = report[i]; // 保存当前选中的 JSON
+
+    // 切换时清空旧的 AI 报告，避免混淆
+    $("aiReportBox").innerHTML = '<div class="muted">请点击上方按钮生成报告。</div>';
+    $("aiStatus").textContent = "";
+};
+
+// 新增：生成 AI 报告逻辑
+$("btnGenAI").addEventListener("click", async () => {
+    if (!currentReportData) {
+        alert("请先在左侧选择一个告警！");
+        return;
+    }
+
+    const btn = $("btnGenAI");
+    const status = $("aiStatus");
+    const box = $("aiReportBox");
+
+    // UI Loading 态
+    btn.disabled = true;
+    status.textContent = "正在分析攻击链路，请稍候...";
+    box.innerHTML = `<div style="text-align:center; padding:20px; color:#666;">
+        ⏳ AI 正在阅读溯源数据并撰写报告...<br>
+        <small>通常需要 5-10 秒</small>
+    </div>`;
+
+    try {
+        const resp = await fetch("/traceback/api/generate_report_ai", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ report_data: currentReportData })
+        });
+
+        const data = await resp.json();
+
+        if (data.ok) {
+            // 使用 marked.js 渲染 Markdown
+            box.innerHTML = marked.parse(data.data);
+            status.textContent = "生成完成";
+        } else {
+            box.textContent = "生成出错: " + data.error;
+            status.textContent = "失败";
+        }
+    } catch (e) {
+        box.textContent = "网络请求异常: " + e;
+    } finally {
+        btn.disabled = false;
+    }
+});

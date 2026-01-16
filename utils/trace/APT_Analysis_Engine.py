@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 class APTAnalysisEngine:
     def __init__(self, uri, user, password):
         self.driver = GraphDatabase.driver(uri, auth=(user, password))
-        vt_key = os.getenv("VT_API_KEY", "")
+        vt_key = os.getenv("VT_API_KEY", "ccccce76f24f200b35412471d447776e6cafd120c42cc2a44dc2ebd33f098532")
         self.ti_engine = VirusTotalEnricher(vt_key)
 
     def close(self):
@@ -57,12 +57,18 @@ class APTAnalysisEngine:
             # 4. 相似度匹配 (Similarity Matching)
             match_result = self._match_known_apts(attack_signature['ttp_set'])
 
-            # 5. 结果处理与闭环
+            # 5. 结果处理
             if match_result['is_match']:
-                logging.info(f"场景 {scenario['scenario_id']} 匹配到已知组织: {match_result['best_match']}")
-                profile_type = "Known APT"
+                # 如果匹配到了（无论是已知APT还是历史未知组织）
+                logging.info(f"场景匹配成功: {match_result['best_match']} ({match_result['match_type']})")
+                profile_type = match_result['match_type']  # 使用返回的类型 (Known APT 或 Suspected Group)
+
+                # 即使匹配到了 Suspected Group，也可以选择更新一下它的 last_seen
+                if profile_type == 'Suspected Group':
+                    self._save_new_attacker_profile(attack_signature, trace_context)
+
             else:
-                logging.info(f"场景 {scenario['scenario_id']} 未匹配已知组织，生成新画像")
+                logging.info(f"场景未匹配，生成新画像")
                 profile_type = "Unknown Actor"
                 self._save_new_attacker_profile(attack_signature, trace_context)
 
@@ -125,11 +131,11 @@ class APTAnalysisEngine:
 
     def _trace_root_cause_and_infrastructure(self, root_event_id, victim_ip, all_events, root_timestamp):
         """
-        [整合优化] 同时执行基础设施提取 + 深度入侵点研判
+        [修改版] 在所有相关事件中寻找最早的进程链作为根因，而不仅限于第一个事件
         """
         event_ids = [e['id'] for e in all_events]
 
-        # 1. 基础设施提取查询
+        # 1. 基础设施提取 (保持不变)
         infra_query = """
         UNWIND $eids AS eid
         MATCH (ae:AttackEvent {id: eid})
@@ -144,14 +150,20 @@ class APTAnalysisEngine:
             collect(DISTINCT entity.hash) AS proc_hashes
         """
 
-        # 2. 基础 Root 进程查找查询
-        # 先找到攻击链起点的父进程，再把这个父进程丢给 _identify_initial_intrusion 去分析
+        # 2. [核心修改] 遍历所有事件，寻找最早的 Process 实体，并向上回溯
+        # 不再依赖 $root_id，而是使用 UNWIND $eids
         root_trace_query = """
-        MATCH (ae:AttackEvent {id: $root_id})<-[:TRIGGERED]-(entity:Process)
-        // 向上找父进程链，直到找不到父进程（即视野内的根）
+        UNWIND $eids AS eid
+        MATCH (ae:AttackEvent {id: eid})<-[:TRIGGERED]-(entity:Process)
+
+        // 向上找父进程链，直到找不到父进程
         MATCH path = (root:Process)-[:Spawn*0..5]->(entity)
         WHERE NOT (root)<-[:Spawn]-()
-        RETURN root.name AS root_name, root.pid AS root_pid, root.user AS user
+
+        // 返回结果，并按关联事件的时间排序，取最早的一个
+        RETURN root.name AS root_name, root.pid AS root_pid, root.user AS user, ae.timestamp_start AS ts
+        ORDER BY ts ASC
+        LIMIT 1
         """
 
         context = {
@@ -168,7 +180,7 @@ class APTAnalysisEngine:
                     "ips": [i for i in infra_res['ips'] if i],
                     "hashes": [h for h in infra_res['proc_hashes'] if h] + [h for h in infra_res['file_hashes'] if h]
                 }
-                # 情报富化
+                # 情报富化 (保持不变)
                 if context['infrastructure']['domains']:
                     try:
                         domain_info = self.ti_engine.get_domain_report(context['infrastructure']['domains'][0])
@@ -177,28 +189,28 @@ class APTAnalysisEngine:
                     except Exception:
                         pass
 
-            # 执行 Root 进程查找
-            root_res = session.run(root_trace_query, root_id=root_event_id).single()
+            # [修改] 传入 eids 列表而不是 root_id
+            root_res = session.run(root_trace_query, eids=event_ids).single()
 
             if root_res:
-                # [核心整合点] 找到根进程后，调用复杂的推断逻辑
                 root_name = root_res['root_name']
                 root_pid = root_res['root_pid']
+                # 使用该进程对应事件的时间，或者传入的整个场景开始时间
+                incident_time = root_res['ts'] or root_timestamp
 
                 logging.info(f"定位到根进程: {root_name} (PID: {root_pid})，开始深度研判...")
 
-                # 调用移植过来的深度分析函数
                 detailed_cause = self._identify_initial_intrusion(
                     victim_ip,
                     root_name,
                     root_pid,
-                    root_timestamp
+                    incident_time
                 )
                 context['root_cause'] = detailed_cause
             else:
                 context['root_cause'] = {
                     "type": "Unknown",
-                    "evidence": "No process chain found (Network-only event?)"
+                    "evidence": "No process chain found (Network-only or Credential-based event?)"
                 }
 
         return context
@@ -215,27 +227,28 @@ class APTAnalysisEngine:
         // 逻辑：外部IP -> 流量(端口匹配) -> Web进程 -> 衍生恶意进程
         // =========================================================
         MATCH (root:Process {host: $ip, pid: $pid})
-        // 确保 root 进程在攻击开始前或同时存在
         WHERE datetime(root.timestamp) <= datetime($ts)
 
-        // 查找在该进程启动前，外部IP对该主机的入站流量
         MATCH (attacker:IP)-[flow:Traffic_Flow]->(victim:IP {id: $ip})
-        WHERE attacker.type = 'External'  
+        // [修改核心] 去掉 attacker.type = 'External' 的限制，改为排除自身
+        WHERE attacker.ip <> $ip
           AND datetime(flow.timestamp) >= datetime(root.timestamp) - duration('PT10M') 
           AND datetime(flow.timestamp) <= datetime(root.timestamp)
 
-        // 强关联：进程名暗示了它是一个网络服务
         AND (
-            root.name =~ '(?i).*(java|w3wp|tomcat|nginx|httpd|php|node).*'
+            root.name =~ '(?i).*(java|w3wp|tomcat|nginx|httpd|php|node|ssh|sshd).*' // 增加 sshd
             OR
             exists((root)-[:LISTEN]->()) 
         )
 
         RETURN 
-            'Exploit Public-Facing Application' AS type,
+            CASE 
+                WHEN attacker.type = 'External' THEN 'Exploit Public-Facing Application'
+                ELSE 'Lateral Movement / Internal Compromise' 
+            END AS type,
             attacker.ip AS intruder_ip,
             'High' AS confidence,
-            'Attacker accessed port ' + toString(flow.dst_port) + ' of service ' + root.name AS evidence,
+            'Traffic from ' + attacker.ip + ' preceded process ' + root.name AS evidence,
             flow.timestamp AS entry_time
 
         UNION ALL
@@ -322,14 +335,23 @@ class APTAnalysisEngine:
 
     def _match_known_apts(self, detected_ttps):
         """
-        [相似度计算] 计算 Jaccard 系数匹配已知 APT 组织
+        [增强版] 同时匹配“已知MITRE组织”和“历史记录的未知组织”
         """
+        # 修改点：使用 UNION ALL 同时查询两类节点
         query = """
+        // 1. 查已知组织 (IntrusionSet)
         MATCH (is:IntrusionSet)-[:USES]->(t:Technique)
-        RETURN is.id AS group_name, collect(t.id) AS group_ttps
+        RETURN is.id AS group_name, 'Known APT' AS type, collect(t.id) AS group_ttps
+
+        UNION ALL
+
+        // 2. 查历史记录的未知组织 (AttackerProfile)
+        MATCH (ap:AttackerProfile)-[:USES]->(t:Technique)
+        RETURN ap.id AS group_name, 'Suspected Group' AS type, collect(t.id) AS group_ttps
         """
 
         best_match = None
+        match_type = "Unknown"
         max_score = 0.0
         details = []
 
@@ -338,30 +360,37 @@ class APTAnalysisEngine:
 
             for record in results:
                 group_name = record['group_name']
+                group_type = record['type']
                 group_ttps = set(record['group_ttps'])
 
+                # Jaccard 相似度计算
                 intersection = len(detected_ttps.intersection(group_ttps))
                 union = len(detected_ttps.union(group_ttps))
 
                 if union == 0: continue
                 score = intersection / union
 
+                # 记录候选者
                 if score > 0.1:
                     details.append({
                         "group": group_name,
+                        "type": group_type,
                         "score": round(score, 3),
                         "overlap": list(detected_ttps.intersection(group_ttps))
                     })
 
+                # 更新最佳匹配
                 if score > max_score:
                     max_score = score
                     best_match = group_name
+                    match_type = group_type
 
-        is_match = max_score > 0.2
+        is_match = max_score > 0.2  # 阈值
 
         return {
             "is_match": is_match,
             "best_match": best_match,
+            "match_type": match_type,  # 新增字段，告诉前端是 Known APT 还是 历史记录
             "confidence_score": max_score,
             "candidates": sorted(details, key=lambda x: x['score'], reverse=True)[:3]
         }

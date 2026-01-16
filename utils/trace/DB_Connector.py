@@ -2,11 +2,12 @@ import os
 import pyodbc
 import json
 import logging
+from config import Config
 
 # 默认连接配置：改为 SecurityTraceDB（你要求的）
-DEFAULT_SQL_SERVER = os.getenv("TRACE_SQL_HOST", "10.21.211.11,1433")
+DEFAULT_SQL_SERVER = os.getenv("TRACE_SQL_HOST", "10.21.226.213,1433")
 DEFAULT_SQL_USER = os.getenv("TRACE_SQL_USER", "sa")
-DEFAULT_SQL_PASS = os.getenv("TRACE_SQL_PASS", "000000")
+DEFAULT_SQL_PASS = os.getenv("TRACE_SQL_PASS", "123123")
 DEFAULT_SQL_DB = os.getenv("TRACE_SQL_DB", "SecurityTraceDB")
 
 

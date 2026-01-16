@@ -110,6 +110,20 @@ class ATTACKMapper:
         """
         核心函数：接收单条归一化后的数据，返回ATT&CK映射结果
         """
+        # --- [新增] 白名单过滤逻辑 ---
+        entities = event_data.get('entities', {})
+        cmdline = entities.get('command_line') or entities.get('cmdline') or ""
+
+        # 1. 忽略探针自身的进程 (防止递归检测)
+        if "client_agent.py" in cmdline or "behavior_monitor" in cmdline:
+            return []
+
+        # 2. 忽略分析引擎自身的流量 (连接 Neo4j 或 SQL Server 的流量)
+        dst_port = event_data.get('dst_port')
+        if dst_port in [7687, 1433, 5000]:  # Neo4j, SQL, Flask
+            return []
+        # ---------------------------
+
         if not self.rules:
             logging.warning("规则库为空，无法执行分析")
             return []
@@ -119,6 +133,7 @@ class ATTACKMapper:
         # 1. 提取基础信息
         data_source = event_data.get("data_source")
         event_type = event_data.get("event_type")
+
         # 合并特征方便查找
         features = {}
         if "behavior_features" in event_data:
@@ -137,101 +152,137 @@ class ATTACKMapper:
             if trigger.get('event_type') != event_type:
                 continue
 
-            # ================= [新增/修改逻辑] =================
-            # 检查是否需要聚合 (例如暴力破解规则)
-            # 假设我们在 yaml 规则中增加了一个字段 'threshold'
-            # 如果规则没写 threshold，默认为 1 (即单条触发)
-            rule_threshold = rule.get('trigger', {}).get('threshold', 1)
-
+            # 2.3 检查阈值与聚合 (针对暴力破解等)
+            rule_threshold = trigger.get('threshold', 1)
             is_triggered = False
 
             if rule_threshold > 1:
-                    # 调用聚合器检查
+                # 调用聚合器检查
                 if self.aggregator.check_threshold(event_data, rule_threshold):
                     is_triggered = True
             else:
-                # 2.3 检查特征条件 (Features)
+                # 2.4 检查特征条件 (Features)
                 feature_match = True
 
                 # 检查 behavior_features
-                if 'behavior_features' in trigger:
-                    for key, val in trigger['behavior_features'].items():
-                        # 只有当特征存在且值相等时才算匹配
-                        if features.get(key) != val:
-                            feature_match = False
-                            break
+                # [新增] 检查 entities (Process Name, File Path, Registry Key)
+                if feature_match and 'entities' in trigger:
+                    event_entities = event_data.get('entities', {})
+                    for key, val in trigger['entities'].items():
+                        event_val = event_entities.get(key)
 
-                # 检查 traffic_features
-                if feature_match and 'traffic_features' in trigger:
-                    for key, val in trigger['traffic_features'].items():
-                        if features.get(key) != val:
+                        # 支持列表匹配 (rule defined list of suspicious processes)
+                        if isinstance(val, list):
+                            if event_val not in val:
+                                feature_match = False
+                                break
+                        # 支持字符串包含匹配 (e.g. registry key contains "Run")
+                        elif isinstance(val, str) and isinstance(event_val, str):
+                            if val not in event_val:  # 简单的包含匹配
+                                feature_match = False
+                                break
+                        # 精确匹配
+                        elif event_val != val:
                             feature_match = False
                             break
 
                 if feature_match:
                     is_triggered = True
 
+            # ================= [修复的核心代码块] =================
             if is_triggered:
-                # ... (构造输出 attack_result 的代码不变) ...
-                # 只是这里要注意，timestamp_start 可能是聚合窗口的开始时间
-                # 但简单起见，仍使用当前事件时间
-                pass
-                # 把原代码里的 构造输出 部分放在这里
+                logging.info(f"[ALERT] Rule Triggered! RuleID={rule.get('rule_id')} EventType={event_type}")
 
-                # (为了完整性，这里补全原代码的构造逻辑)
-                attack_mapping = rule.get('attack_mapping', {})
+                mapping = rule.get('attack_mapping', {})
+
+                # 生成导致该告警的实体节点的唯一ID (用于构建 Process -> TRIGGERED -> AttackEvent 关系)
+                related_entity_id = self._generate_event_id(event_data)
+
                 attack_result = {
-                    "attack_id": str(uuid.uuid4()),
+                    "attack_id": str(uuid.uuid4()),  # 攻击事件唯一ID (Neo4j: AttackEvent节点ID)
+                    "rule_id": rule.get("rule_id"),  # 补充：便于追溯是哪条规则触发的
                     "tactic": {
-                        "id": attack_mapping.get('tactic_id'),
-                        "name": attack_mapping.get('tactic_name')
+                        "id": mapping.get('tactic_id'),
+                        "name": mapping.get('tactic_name')
                     },
                     "technique": {
-                        "id": attack_mapping.get('technique_id'),
-                        "name": attack_mapping.get('technique_name')
+                        "id": mapping.get('technique_id'),
+                        "name": mapping.get('technique_name')
                     },
-                    "related_events": [self._generate_event_id(event_data)],
-                    "confidence": "High",
+                    # 这里存放的是“源实体”的ID列表，用于在图数据库中建立边
+                    "related_events": [related_entity_id],
+                    "confidence": "High",  # 默认高置信度，可根据规则复杂程度调整
                     "timestamp_start": event_data.get("timestamp"),
-                    "timestamp_end": event_data.get("timestamp"),
+                    "timestamp_end": event_data.get("timestamp"),  # 如果是聚合事件，这里可以延后
                     "victim_ip": event_data.get("host_ip") or event_data.get("src_ip"),
                     "attacker_ip": self._extract_attacker_ip(event_data),
-                    "stage_order": self._determine_stage(attack_mapping.get('tactic_name'))
+                    # 计算攻击阶段顺序 (1-11)
+                    "stage_order": self._determine_stage(mapping.get('tactic_name')),
+                    "description": rule.get("description", "No description provided")
                 }
                 matched_attacks.append(attack_result)
+            # ====================================================
+
         return matched_attacks
 
     def _extract_attacker_ip(self, event):
-        if event.get('data_source') == 'network_traffic':
+        # 如果是外传类规则 (Exfiltration / C2)，目标IP通常是攻击者
+        if event.get('event_type') in ['data_exfiltration', 'dns_tunnel_suspected', 'icmp_tunnel_suspected']:
             return event.get('dst_ip')
-        if 'entities' in event:
-            return event['entities'].get('src_ip')
-        return None
+
+        # 如果是入站攻击 (Exploit / Scan / Login)，源IP是攻击者
+        if 'src_ip' in event.get('entities', {}):
+            return event['entities']['src_ip']
+
+        return event.get('src_ip')
 
     def _generate_event_id(self, event):
-        if event.get('data_source') in ['host_behavior', 'host_log']:
-            host_ip = event.get('host_ip')
-            entities = event.get('entities', {})
+        """
+        生成与图数据库实体节点一致的 ID，用于建立 TRIGGERED 关系。
+        规则参考《数据库设计字典》第一层：实体层。
+        """
+        data_source = event.get('data_source')
+        entities = event.get('entities', {})
+        host_ip = event.get('host_ip')
+
+        # 1. 进程相关行为 (Process Node ID: HostIP_PID_CreateTime)
+        # 注意：如果是 process_create，timestamp 就是 CreateTime
+        # 如果是其他行为（如 file_create），理想情况是知道发起进程的启动时间，
+        # 但如果不知道，这里只能尽可能返回能标识该进程的ID。
+        # 简化策略：如果是 process_create，使用当前时间戳作为后缀；
+        # 如果是子行为，通常日志里不带父进程启动时间，可能需要基于 PID 模糊匹配（此处暂略，假设已有逻辑或仅返回 Host_PID）
+        if data_source == 'host_behavior' or 'pid' in entities:
             pid = entities.get('pid')
-
+            # 严格对应接口文档 Process 节点 ID
+            # 注意：实际生产中需要缓存 PID->StartTime 的映射，这里做简化处理
+            timestamp_suffix = event.get('timestamp') if event.get('event_type') == 'process_create' else 'unknown'
             if host_ip and pid:
-                # 逻辑必须与 Graph_construct.py 保持完全一致
-                if event.get('event_type') == 'process_create':
-                    time_suffix = event.get('timestamp')
-                else:
-                    time_suffix = 'unknown'
-                return f"{host_ip}_{pid}_{time_suffix}"
+                return f"{host_ip}_{pid}_{timestamp_suffix}"
 
-            # 2. 如果是网络流量，优先返回 Domain ID 或 IP ID
-        if event.get('data_source') == 'network_traffic':
-            entities = event.get('entities', {})
+        # 2. 网络流量相关 (Domain Node 或 IP Node)
+        if data_source == 'network_traffic':
+            # 如果是 DNS 隧道，关联到 Domain 节点
             if entities.get('domain'):
-                return entities.get('domain')
-            if event.get('src_ip'):
-                return event.get('src_ip')
+                return entities.get('domain')  # ID: DomainName
 
-            # 3. 兜底：返回旧格式 (虽然匹配不到实体，但至少有记录)
-        return f"{event.get('data_source')}_{event.get('timestamp')}_{event.get('event_type')}"
+            # 否则关联到源 IP (作为攻击发起点或受害点)
+            if event.get('src_ip'):
+                return event.get('src_ip')  # ID: IP_Address
+
+        # 3. 主机日志相关 (User Node 或 IP Node)
+        if data_source == 'host_log':
+            # 登录相关，关联到 User 节点 (ID: HostIP_Username)
+            if 'user' in entities and host_ip:
+                return f"{host_ip}_{entities['user']}"
+
+        # 4. 注册表相关 (Registry Node)
+        # 接口文档定义 ID 为 Registry_Key_Path
+        if event.get('event_type') == 'registry_set_value':
+            if entities.get('registry_key'):
+                return entities.get('registry_key')
+
+        # 5. 兜底：防止返回 None 导致报错
+        return f"Unlinked_Event_{event.get('timestamp')}"
 
     def _determine_stage(self, tactic_name):
         stages = {

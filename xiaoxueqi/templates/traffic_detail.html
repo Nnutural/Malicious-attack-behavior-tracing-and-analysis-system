@@ -1,0 +1,59 @@
+{% extends "layout.html" %}
+
+{% block title %}流量详情 - 攻击溯源分析系统{% endblock %}
+
+{% block content %}
+<style>
+  .btn-link{
+    display:inline-block;
+    padding:8px 12px;
+    border-radius:10px;
+    border:1px solid var(--border);
+    background:#fff;
+    color:#111;
+    font-size:14px;
+    line-height:1.2;
+    text-decoration:none;
+    white-space:nowrap;
+  }
+  .btn-link:hover{ background:#f5f5f5; text-decoration:none; }
+  .btn-link.secondary{
+    background:#334155;
+    color:#fff;
+    border-color:#334155;
+  }
+  .btn-link.secondary:hover{
+    background:#1f2937;
+    border-color:#1f2937;
+  }
+</style>
+
+<h2>流量详情</h2>
+<p class="muted">展示单条网络流量事件的归一化字段（result）与完整内容（content）。</p>
+
+<a class="btn-link secondary" href="{{ traffic.back_url or url_for('traffic.index') }}">← 返回列表</a>
+
+<div class="card" style="margin-top:12px;">
+  <h3 style="margin-top:0;">流量 #{{ traffic.id }}</h3>
+
+  <table>
+    <tbody>
+      <tr><th style="width:160px;">create_time</th><td>{{ traffic.create_time }}</td></tr>
+      <tr><th>event_time_utc</th><td>{{ traffic.event_time_utc }}</td></tr>
+      <tr><th>timestamp</th><td>{{ traffic.timestamp }}</td></tr>
+      <tr><th>src_ip</th><td>{{ traffic.src_ip }}</td></tr>
+      <tr><th>dst_ip</th><td>{{ traffic.dst_ip }}</td></tr>
+      <tr><th>protocol</th><td>{{ traffic.protocol }}</td></tr>
+      <tr><th>event_type</th><td>{{ traffic.event_type }}</td></tr>
+      <tr><th>description</th><td style="white-space:normal;">{{ traffic.description }}</td></tr>
+      <tr><th>event_hash</th><td>{{ traffic.event_hash }}</td></tr>
+    </tbody>
+  </table>
+
+  <h4>归一化结果（result）</h4>
+  <pre>{{ traffic.result_json_pretty }}</pre>
+
+  <h4>完整内容（content）</h4>
+  <pre>{{ traffic.raw_content }}</pre>
+</div>
+{% endblock %}

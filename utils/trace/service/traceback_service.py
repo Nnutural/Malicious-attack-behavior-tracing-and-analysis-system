@@ -13,7 +13,7 @@ from typing import Any
 from utils.trace.Graph_Serializer import GraphSerializer
 from utils.trace.service.attack_reports_store import get_latest_attack_reports, parse_report_json
 
-NEO4J_URI = "bolt://localhost:7687"
+NEO4J_URI = "bolt://10.21.211.11:7687"
 NEO4J_USER = "neo4j"
 NEO4J_PASSWORD = "00000000"
 
@@ -97,10 +97,19 @@ class TracebackService:
         }
 
         attribution = report_obj.get("attribution") or {}
-        if attribution and attribution.get("type") == "Known APT":
-            best = (attribution.get("result") or {}).get("best_match") or ""
+        attr_type = attribution.get("type")
+
+        # 允许 Known APT 和 Suspected Group 都进行展示
+        if attribution and attr_type in ["Known APT", "Suspected Group"]:
+            best = (attribution.get("result") or {}).get("best_match") or "Unknown Cluster"
             score = (attribution.get("result") or {}).get("confidence_score") or 0
-            attacker_profile["suspected_apt"] = [{"group": best, "similarity_score": score}]
+
+            # 如果是疑似团伙，名字可能是一串 ID，我们可以加个前缀让它好读一点
+            display_name = best
+            if attr_type == "Suspected Group":
+                display_name = f"Unidentified Cluster ({best[:8]})"
+
+            attacker_profile["suspected_apt"] = [{"group": display_name, "similarity_score": score}]
 
         # 简化 timeline：用 attack_chain 做一个演示时间线
         timeline = []
