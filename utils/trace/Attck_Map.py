@@ -151,16 +151,24 @@ class ATTACKMapper:
                 feature_match = True
 
                 # 检查 behavior_features
-                if 'behavior_features' in trigger:
-                    for key, val in trigger['behavior_features'].items():
-                        if features.get(key) != val:
-                            feature_match = False
-                            break
+                # [新增] 检查 entities (Process Name, File Path, Registry Key)
+                if feature_match and 'entities' in trigger:
+                    event_entities = event_data.get('entities', {})
+                    for key, val in trigger['entities'].items():
+                        event_val = event_entities.get(key)
 
-                # 检查 traffic_features
-                if feature_match and 'traffic_features' in trigger:
-                    for key, val in trigger['traffic_features'].items():
-                        if features.get(key) != val:
+                        # 支持列表匹配 (rule defined list of suspicious processes)
+                        if isinstance(val, list):
+                            if event_val not in val:
+                                feature_match = False
+                                break
+                        # 支持字符串包含匹配 (e.g. registry key contains "Run")
+                        elif isinstance(val, str) and isinstance(event_val, str):
+                            if val not in event_val:  # 简单的包含匹配
+                                feature_match = False
+                                break
+                        # 精确匹配
+                        elif event_val != val:
                             feature_match = False
                             break
 
